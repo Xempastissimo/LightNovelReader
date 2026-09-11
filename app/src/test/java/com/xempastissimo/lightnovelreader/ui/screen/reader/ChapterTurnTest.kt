@@ -185,4 +185,20 @@ class ChapterTurnTest {
             ),
         )
     }
+
+    /**
+     * How a chapter change is announced. The first chapter has nothing before it, and a
+     * chapter picked out of the list has no direction, so neither may claim to be
+     * "next" or "previous".
+     */
+    @Test
+    fun `a chapter change is classified by the one before it`() {
+        assertEquals(ChapterMove.FORWARD, chapterMove(previousIndex = 3, index = 4))
+        assertEquals(ChapterMove.BACKWARD, chapterMove(previousIndex = 3, index = 2))
+        // The chapter the reader was opened at.
+        assertEquals(ChapterMove.JUMP, chapterMove(previousIndex = null, index = 7))
+        // A chapter picked out of the list, even when it happens to be adjacent by number.
+        assertEquals(ChapterMove.JUMP, chapterMove(previousIndex = 3, index = 9))
+        assertEquals(ChapterMove.JUMP, chapterMove(previousIndex = 3, index = 3))
+    }
 }

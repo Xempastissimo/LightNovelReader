@@ -6,6 +6,21 @@ import kotlin.math.abs
 internal enum class ChapterTurn { NONE, FORWARD, BACKWARD }
 
 /**
+ * How the chapter now on screen relates to the one before it.
+ *
+ * [JUMP] covers both the first chapter the reader was opened at and a chapter picked out
+ * of the list: neither has a direction, but the second is still worth announcing.
+ */
+internal enum class ChapterMove { FORWARD, BACKWARD, JUMP }
+
+/** Classifies a chapter change by how it was reached. */
+internal fun chapterMove(previousIndex: Int?, index: Int): ChapterMove = when {
+    previousIndex != null && index == previousIndex + 1 -> ChapterMove.FORWARD
+    previousIndex != null && index == previousIndex - 1 -> ChapterMove.BACKWARD
+    else -> ChapterMove.JUMP
+}
+
+/**
  * Decides whether a finished horizontal drag should leave the current chapter.
  *
  * `HorizontalPager` refuses to move past its first or last page, so a swipe off the end

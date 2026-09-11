@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -31,6 +32,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -44,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -74,6 +77,7 @@ import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -566,6 +570,36 @@ fun ReaderScreen(
     /** Turns the chapter, or reports that it could not so the gesture can be left alone. */
     val turnChapter: (Boolean) -> Boolean = viewModel::turnChapter
 
+    // What to say about the chapter change in flight, and about the one that just landed.
+    // Tracking this here rather than in the view model keeps it with the thing it
+    // describes — the reader's own transition — and makes it fire for every way a chapter
+    // can change (swipe, volume key, the two buttons, the list) without any of them
+    // having to remember to announce itself.
+    var previousChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var chapterBanner by remember { mutableStateOf<ChapterBanner?>(null) }
+    val move = chapterMove(previousChapterIndex, state.chapterIndex)
+    val chapterCount = state.detail?.chapters?.size ?: 0
+
+    LaunchedEffect(state.content?.chapterId) {
+        val content = state.content ?: return@LaunchedEffect
+        val index = state.chapterIndex
+        val previous = previousChapterIndex
+        previousChapterIndex = index
+        // The chapter the reader was opened at is not a move; announcing it would be
+        // telling the user about something they just asked for.
+        if (previous == null) return@LaunchedEffect
+        chapterBanner = ChapterBanner(
+            label = when (chapterMove(previous, index)) {
+                ChapterMove.FORWARD -> "下一章"
+                ChapterMove.BACKWARD -> "上一章"
+                ChapterMove.JUMP -> "第 ${index + 1}/$chapterCount 章"
+            },
+            title = content.title,
+        )
+        delay(CHAPTER_BANNER_MILLIS)
+        chapterBanner = null
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -607,7 +641,11 @@ fun ReaderScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(top = 120.dp),
-                label = "加载章节…",
+                label = when (move) {
+                    ChapterMove.FORWARD -> "正在载入下一章…"
+                    ChapterMove.BACKWARD -> "正在载入上一章…"
+                    ChapterMove.JUMP -> "加载章节…"
+                },
             )
 
             state.error != null -> Box(
@@ -669,6 +707,47 @@ fun ReaderScreen(
 
                             null -> Box(modifier = Modifier.fillMaxSize())
                         }
+                    }
+                }
+            }
+        }
+
+        // Names the chapter that was just entered. A swipe off the end of the previous one
+        // is the only way to change chapter that the user did not ask for in words, so it
+        // is the one that most needs saying — and the reader keeps showing it for the other
+        // three ways too, so the feedback does not depend on how the chapter changed.
+        AnimatedVisibility(
+            visible = chapterBanner != null,
+            enter = fadeIn(animationSpec = tween(Motion.ENTER_MILLIS)),
+            exit = fadeOut(animationSpec = tween(Motion.SLOW_MILLIS)),
+            modifier = Modifier.align(Alignment.Center),
+            label = "chapterBanner",
+        ) {
+            val banner = chapterBanner
+            if (banner != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = barPalette.container.copy(alpha = CHAPTER_BANNER_ALPHA),
+                    border = BorderStroke(1.dp, barPalette.content.copy(alpha = 0.16f)),
+                    shadowElevation = 6.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = banner.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = barPalette.content.copy(alpha = 0.7f),
+                        )
+                        Text(
+                            text = banner.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = barPalette.content,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
                     }
                 }
             }
@@ -997,6 +1076,15 @@ private fun ReaderSettingsSheet(
 
 /** How far a drag has to travel past the end of a chapter before it turns the chapter. */
 private val CHAPTER_TURN_THRESHOLD = 56.dp
+
+/** What the reader says about the chapter it has just moved to. */
+private data class ChapterBanner(val label: String, val title: String)
+
+/** How long the chapter banner stays up before fading. */
+private const val CHAPTER_BANNER_MILLIS = 1_800L
+
+/** Nearly opaque: the pages behind it are mid-transition and should not compete. */
+private const val CHAPTER_BANNER_ALPHA = 0.94f
 
 /**
  * Turns the chapter when a horizontal drag runs off the end of this one.
