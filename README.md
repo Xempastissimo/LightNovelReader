@@ -33,7 +33,7 @@
 
 ## 2.页面展示
 
-<img src="./assets/image-20260911203600513.png" alt="image-20260911203600513" style="zoom: 33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911203811917.png" alt="image-20260911203811917" style="zoom: 33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911203928708.png" alt="image-20260911203928708" style="zoom:33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911204018405.png" alt="image-20260911204018405" style="zoom:33%;" />
+<img src="./assets/image-20260911203600513.png" alt="image-20260911203600513" style="zoom: 33%;" /><img src="./assets/image-20260911203811917.png" alt="image-20260911203811917" style="zoom: 33%;" /><img src="./assets/image-20260911203928708.png" alt="image-20260911203928708" style="zoom:33%;" /><img src="./assets/image-20260911204018405.png" alt="image-20260911204018405" style="zoom:33%;" />
 
 ## 3. 功能说明
 
