@@ -1,0 +1,45 @@
+# --- Gradle / Kotlin build state (regenerated on every build) ---
+.gradle
+.kotlin/
+/build
+/app/release
+/release
+.externalNativeBuild
+.cxx
+/captures
+
+# --- Android Studio / IntelliJ local state ---
+*.iml
+.idea/
+# records the selected physical device serial -> machine specific
+# .idea/deploymentTargetSelector.xml
+# device manager stores local device serial numbers / AVD paths
+# .idea/deviceManager.xml
+
+# --- Local configuration: absolute SDK/JDK paths, never portable ---
+local.properties
+local.properties.bak
+
+# --- Build artifacts and signing material ---
+*.apk
+*.aab
+*.ap_
+*.hprof
+*.jks
+*.keystore
+keystore.properties
+
+# --- OS / editor junk ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# --- Browser session captures: these hold live cookies/tokens and must never be
+# committed. Structured as `*auth.json` so any future capture is covered too. ---
+wenku8-auth.json
+*auth.json
+.playwright-cli/
+login-result.yaml
+login-summary.md
+login-success.png

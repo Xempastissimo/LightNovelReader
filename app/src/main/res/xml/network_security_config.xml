@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The book source serves covers and illustrations from an HTTP-only image host,
+  so cleartext is allowed for that host alone. Everything else stays HTTPS-only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">wenku8.com</domain>
+        <domain includeSubdomains="true">wenku8.net</domain>
+    </domain-config>
+</network-security-config>
