@@ -60,8 +60,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xempastissimo.lightnovelreader.data.network.HttpFailure
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
+import com.xempastissimo.lightnovelreader.data.repo.OfflineBook
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
+import com.xempastissimo.lightnovelreader.data.repo.formatBytes
 import com.xempastissimo.lightnovelreader.data.source.BookSource
+import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.ShelfEntry
 import com.xempastissimo.lightnovelreader.ui.AppContainer
 import com.xempastissimo.lightnovelreader.ui.AppViewModelFactory
@@ -85,10 +88,15 @@ import kotlinx.coroutines.launch
  * local-and-online merge did.
  *
  * 继续阅读 is unrelated to the shelf: it is reading history, and stays local.
+ *
+ * 已缓存 answers a third, equally local question — what can be read with the network
+ * off — and is built from the chapter files on disk rather than from either list above,
+ * so a book cached but never favourited still appears.
  */
 enum class ShelfTab(val label: String) {
     RECENT("继续阅读"),
     SHELF("书架"),
+    CACHED("已缓存"),
 }
 
 /** Which of the shelf's mutually exclusive bodies is on show. */
@@ -98,6 +106,14 @@ data class ShelfUiState(
     val tab: ShelfTab = ShelfTab.RECENT,
     val entries: List<ShelfEntry> = emptyList(),
     val allEntries: List<ShelfEntry> = emptyList(),
+    /**
+     * What each book has on disk, keyed by book id.
+     *
+     * Read from the cache directory rather than from `ShelfEntry.cachedChapterIds`: the
+     * record and the files can drift apart (see `ChapterCache.offlineBooks`), and the
+     * 已缓存 tab has to describe the files.
+     */
+    val offline: Map<Int, OfflineBook> = emptyMap(),
     val loading: Boolean = false,
     val syncingOnline: Boolean = false,
     val loggedIn: Boolean = false,
@@ -120,6 +136,9 @@ data class ShelfUiState(
     val onlineCount: Int get() = siteTotalCount ?: allEntries.count { it.online }
 
     val shelfFull: Boolean get() = onlineCapacity > 0 && onlineCount >= onlineCapacity
+
+    /** Total space the offline copies take, for the 已缓存 tab's header. */
+    val offlineBytes: Long get() = offline.values.sumOf { it.sizeBytes }
 
     val allVisibleSelected: Boolean
         get() = entries.isNotEmpty() && selection.size == entries.size
@@ -145,14 +164,12 @@ class ShelfViewModel(
         viewModelScope.launch {
             shelfRepository.entries.collect { entries ->
                 _state.update { current ->
-                    current.copy(
-                        allEntries = entries,
-                        entries = filter(current.tab, entries),
-                        loggedIn = source.isLoggedIn(),
-                    )
+                    val next = current.copy(allEntries = entries, loggedIn = source.isLoggedIn())
+                    next.copy(entries = filter(next.tab, entries, next.offline))
                 }
             }
         }
+        refreshOfflineIndex()
         // The shelf has nothing to show until the site's own list has been read, so the
         // first open pulls it instead of presenting an empty shelf and a refresh button.
         if (source.isLoggedIn()) syncOnlineShelf(quiet = true)
@@ -160,12 +177,40 @@ class ShelfViewModel(
 
     fun selectTab(tab: ShelfTab) {
         _state.update {
-            it.copy(
+            val next = it.copy(
                 tab = tab,
-                entries = filter(tab, it.allEntries),
+                // Multi-select belongs to the 书架 tab. Leaving it has to leave the mode as
+                // well, because its toolbar is only drawn there — otherwise the next tab's
+                // rows would carry tick boxes, and taps on them, with no way to dismiss it.
+                selecting = false,
+                selection = emptySet(),
                 loggedIn = source.isLoggedIn(),
             )
+            next.copy(entries = filter(tab, next.allEntries, next.offline))
         }
+    }
+
+    /**
+     * Re-reads what is on disk.
+     *
+     * Cheap enough to run on every return to the screen (one directory listing per book),
+     * and it has to: the detail screen caches chapters while this screen sits on the back
+     * stack, and only a re-read notices. Doing it in the view model rather than watching
+     * the file system keeps the reader's own writes — one file per chapter turned — off
+     * the main thread.
+     */
+    fun refreshOfflineIndex() {
+        viewModelScope.launch { publishOffline(scanOffline()) }
+    }
+
+    private suspend fun scanOffline(): Map<Int, OfflineBook> =
+        runCatching { bookRepository.offlineBooks() }
+            .getOrDefault(emptyList())
+            .associateBy { it.bookId }
+
+    private fun publishOffline(offline: Map<Int, OfflineBook>) = _state.update { current ->
+        val next = current.copy(offline = offline)
+        next.copy(entries = filter(next.tab, next.allEntries, offline))
     }
 
     /**
@@ -181,6 +226,10 @@ class ShelfViewModel(
      * which is a reasonable place to retry, and the refresh button covers the rest.
      */
     fun onResumed() {
+        // Unconditional, and deliberately before the session check below: chapters cached
+        // on the detail screen are a local change, so a return to the shelf has to notice
+        // them whether or not the account changed.
+        refreshOfflineIndex()
         if (syncInFlight) return
         val loggedIn = source.isLoggedIn()
         if (loggedIn == syncedWhileLoggedIn) return
@@ -286,8 +335,12 @@ class ShelfViewModel(
                 shelfRepository.replaceOnlineEntries(reloaded.entries.map { it.book })
             }
 
+            // The offline copies of the removed books are gone with them, so the 已缓存 tab
+            // has to be rebuilt from a fresh listing rather than believe the record.
+            val offline = scanOffline()
             _state.update {
-                it.copy(
+                val next = it.copy(
+                    offline = offline,
                     selecting = false,
                     selection = emptySet(),
                     onlineCapacity = reloaded?.capacity ?: it.onlineCapacity,
@@ -300,16 +353,66 @@ class ShelfViewModel(
                             "已移除 ${removed.size} 本，另有 ${bookIds.size - removed.size} 本未被站点移除"
                     },
                 )
+                next.copy(entries = filter(next.tab, next.allEntries, offline))
             }
         }
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
 
-    private fun filter(tab: ShelfTab, entries: List<ShelfEntry>): List<ShelfEntry> = when (tab) {
+    /**
+     * Deletes one book's chapters from this device and nothing else.
+     *
+     * The 已缓存 tab is about local space, so its delete is local: the site's bookshelf and
+     * this app's reading progress are facts about the *book*, not about the copy, and
+     * dropping them because someone wanted their storage back would lose data the user
+     * never asked to lose. The shelf's own delete remains the one that reaches the account.
+     */
+    fun deleteOffline(entry: ShelfEntry) {
+        val bookId = entry.book.bookId
+        viewModelScope.launch {
+            bookRepository.deleteOfflineCopy(bookId)
+            // The record of what was cached lives on the shelf row; leaving it behind would
+            // keep the "已缓存到本机" badge on the other tabs for chapters that are gone.
+            shelfRepository.setCachedChapters(bookId, emptySet())
+            publishOffline(_state.value.offline - bookId)
+            _state.update { it.copy(message = "已删除《${entry.book.title}》的本地缓存") }
+        }
+    }
+
+    private fun filter(
+        tab: ShelfTab,
+        entries: List<ShelfEntry>,
+        offline: Map<Int, OfflineBook>,
+    ): List<ShelfEntry> = when (tab) {
         ShelfTab.RECENT -> entries.filter { it.progress != null }.sortedByDescending { it.lastReadAt }
         // Only what the site's bookshelf holds, in the order the site lists it.
         ShelfTab.SHELF -> entries.filter { it.online }.sortedByDescending { it.addedAt }
+        // Whatever can be read with the network off, most recently read first. Not filtered
+        // by `online`: a book does not have to be a favourite to be worth carrying.
+        ShelfTab.CACHED -> cachedEntries(entries, offline)
+    }
+
+    /**
+     * Rows for the 已缓存 tab, from the directory listing rather than from the shelf.
+     *
+     * A book with chapters on disk but no shelf row — a `shelf.json` that failed to parse
+     * leaves exactly that — still gets a row under a placeholder name, because an offline
+     * copy the user cannot see is one they cannot delete. The placeholder is enough to
+     * open the book with; the detail screen fetches the real title.
+     */
+    private fun cachedEntries(
+        entries: List<ShelfEntry>,
+        offline: Map<Int, OfflineBook>,
+    ): List<ShelfEntry> {
+        if (offline.isEmpty()) return emptyList()
+        val known = entries.filter { offline.containsKey(it.book.bookId) }
+        val knownIds = known.mapTo(HashSet()) { it.book.bookId }
+        val orphans = offline.keys
+            .filterNot { it in knownIds }
+            .sorted()
+            .map { bookId -> ShelfEntry(book = Book(bookId = bookId, title = "未知书籍 #$bookId")) }
+        return known.sortedByDescending { it.lastReadAt } + orphans
     }
 
     companion object {
@@ -333,7 +436,9 @@ fun ShelfScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
+    var pendingOfflineDelete by remember { mutableStateOf<ShelfEntry?>(null) }
     var menuBookId by remember { mutableStateOf<Int?>(null) }
+    val cachedTab = state.tab == ShelfTab.CACHED
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -415,16 +520,26 @@ fun ShelfScreen(
             )
         }
 
+        // The 已缓存 tab's own count: what is on this device, and what it costs. Only the
+        // total space is worth a line here — unlike the shelf there is no cap to measure
+        // against, but there is a reason to want the number down.
+        if (cachedTab && state.offline.isNotEmpty()) {
+            OfflineCount(count = state.offline.size, bytes = state.offlineBytes)
+        }
+
         // A shelf sync belongs to the 书架 tab only. It runs in the background when the
         // screen opens (or when the user returns from logging in), and letting it drive
-        // the phase for 继续阅读 too would put a spinner over the reading history for a
-        // request that has nothing to do with it.
+        // the phase for the other tabs too would put a spinner over the reading history or
+        // the local cache for a request that has nothing to do with either.
         val syncing = state.syncingOnline && state.tab == ShelfTab.SHELF
         val phase = when {
             syncing || state.loading -> ShelfPhase.LOADING
             // A fetch was attempted and failed: say why instead of showing an
-            // empty shelf, which reads as "you have no books".
-            state.error != null && state.entries.isEmpty() -> ShelfPhase.ERROR
+            // empty shelf, which reads as "you have no books". The error belongs to the
+            // site's bookshelf, so it must not stand in for the local tabs either.
+            state.error != null && state.entries.isEmpty() && state.tab == ShelfTab.SHELF ->
+                ShelfPhase.ERROR
+
             state.entries.isEmpty() -> ShelfPhase.EMPTY
             else -> ShelfPhase.CONTENT
         }
@@ -441,7 +556,11 @@ fun ShelfScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 60.dp),
-                    label = if (tab == ShelfTab.SHELF) "正在读取站点在线书架…" else "读取本地书架…",
+                    label = when (tab) {
+                        ShelfTab.SHELF -> "正在读取站点在线书架…"
+                        ShelfTab.CACHED -> "正在读取本机缓存…"
+                        ShelfTab.RECENT -> "读取本地书架…"
+                    },
                 )
 
                 ShelfPhase.ERROR -> EmptyBox(
@@ -458,6 +577,7 @@ fun ShelfScreen(
                     title = when (tab) {
                         ShelfTab.RECENT -> "还没有阅读记录"
                         ShelfTab.SHELF -> if (state.loggedIn) "站点在线书架还是空的" else "登录后查看站点书架"
+                        ShelfTab.CACHED -> "还没有缓存任何轻小说"
                     },
                     hint = when (tab) {
                         ShelfTab.RECENT -> "打开任意一本书开始阅读，进度会自动记录"
@@ -467,6 +587,10 @@ fun ShelfScreen(
                         } else {
                             "书架展示的是站点账号里的收藏，需要先登录才能读取"
                         }
+
+                        ShelfTab.CACHED ->
+                            "在书籍详情页点「缓存全本」，整本书会下载到本机，" +
+                                "之后没有网络也能阅读；这里只显示已经下载的章节"
                     },
                     actionLabel = if (tab == ShelfTab.SHELF && !state.loggedIn) "去登录" else "去搜索",
                     onAction = {
@@ -484,6 +608,7 @@ fun ShelfScreen(
                     items(state.entries, key = { it.book.bookId }) { entry ->
                         val bookId = entry.book.bookId
                         val selected = bookId in state.selection
+                        val cachedCopy = state.offline[bookId]
                         Box {
                             ShelfRow(
                                 book = entry.book,
@@ -496,7 +621,13 @@ fun ShelfScreen(
                                         }
                                 },
                                 progressFraction = null,
-                                offline = entry.hasOfflineCopy,
+                                // Read from the directory listing on every tab, not from the
+                                // row's own record: a chapter cached by reading it online
+                                // never reaches that record, and the badge would stay off.
+                                offline = cachedCopy != null,
+                                offlineText = cachedCopy?.let {
+                                    "已缓存 ${it.chapterCount} 章 · ${formatBytes(it.sizeBytes)}"
+                                },
                                 onClick = {
                                     if (state.selecting) {
                                         viewModel.toggleSelection(bookId)
@@ -522,8 +653,19 @@ fun ShelfScreen(
                                     if (state.selecting) {
                                         Checkbox(checked = selected, onCheckedChange = null)
                                     } else {
-                                        IconButton(onClick = { pendingRemoval = entry }) {
-                                            Icon(Icons.Filled.Delete, contentDescription = "移除")
+                                        IconButton(
+                                            onClick = {
+                                                if (cachedTab) {
+                                                    pendingOfflineDelete = entry
+                                                } else {
+                                                    pendingRemoval = entry
+                                                }
+                                            },
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = if (cachedTab) "删除本地缓存" else "移除",
+                                            )
                                         }
                                     }
                                 },
@@ -536,9 +678,16 @@ fun ShelfScreen(
                                         menuBookId = null
                                         onOpenBook(bookId)
                                     },
-                                    onRemove = {
+                                    // The two tabs' deletes reach different things, so the
+                                    // menu has to name the one it will do.
+                                    deleteLabel = if (cachedTab) "删除本地缓存" else "从书架移除",
+                                    onDelete = {
                                         menuBookId = null
-                                        pendingRemoval = entry
+                                        if (cachedTab) {
+                                            pendingOfflineDelete = entry
+                                        } else {
+                                            pendingRemoval = entry
+                                        }
                                     },
                                 )
                             }
@@ -561,10 +710,31 @@ fun ShelfScreen(
                     append("阅读进度会一并清除。")
                 }
             },
+            confirmLabel = "移除",
             onDismiss = { pendingRemoval = null },
             onConfirm = {
                 pendingRemoval = null
                 viewModel.remove(entry)
+            },
+        )
+    }
+
+    // The 已缓存 tab's delete asks too, but about something smaller: only the copy on this
+    // device goes, and saying so is what keeps the question from reading like the one above.
+    pendingOfflineDelete?.let { entry ->
+        val cached = state.offline[entry.book.bookId]
+        RemoveBookDialog(
+            title = "删除《${entry.book.title}》的本地缓存？",
+            body = buildString {
+                append("会删除本机已缓存的")
+                if (cached != null) append(" ${cached.chapterCount} 章（${formatBytes(cached.sizeBytes)}）")
+                append("，站点在线书架与阅读进度都不受影响。")
+            },
+            confirmLabel = "删除",
+            onDismiss = { pendingOfflineDelete = null },
+            onConfirm = {
+                pendingOfflineDelete = null
+                viewModel.deleteOffline(entry)
             },
         )
     }
@@ -591,6 +761,7 @@ private const val CONFIRM_SURFACE_ALPHA = 0.88f
 private fun RemoveBookDialog(
     title: String,
     body: String,
+    confirmLabel: String,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -643,7 +814,7 @@ private fun RemoveBookDialog(
                                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                             ),
                         ) {
-                            Text("移除")
+                            Text(confirmLabel)
                         }
                     }
                 }
@@ -689,13 +860,42 @@ private fun OnlineShelfCount(count: Int, capacity: Int, inGroup: Int, full: Bool
     }
 }
 
+/**
+ * What the device is holding for offline reading.
+ *
+ * The count and the space are the two things the tab exists to answer, and the space is
+ * the one a user comes here to reduce.
+ */
+@Composable
+private fun OfflineCount(count: Int, bytes: Long) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = "共 $count 本",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "占用 ${formatBytes(bytes)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** The actions a shelf row offers on long press. */
 @Composable
 private fun RowMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     onOpenDetail: () -> Unit,
-    onRemove: () -> Unit,
+    deleteLabel: String,
+    onDelete: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(
@@ -704,9 +904,9 @@ private fun RowMenu(
             onClick = onOpenDetail,
         )
         DropdownMenuItem(
-            text = { Text("从书架移除") },
+            text = { Text(deleteLabel) },
             leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-            onClick = onRemove,
+            onClick = onDelete,
         )
     }
 }

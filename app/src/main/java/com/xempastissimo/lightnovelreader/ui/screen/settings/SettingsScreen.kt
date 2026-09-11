@@ -1,7 +1,12 @@
 package com.xempastissimo.lightnovelreader.ui.screen.settings
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -125,6 +130,9 @@ class SettingsViewModel(
     fun setKeepScreenOn(value: Boolean) = viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
 
     fun setVolumeKeyPaging(value: Boolean) = viewModelScope.launch { settingsRepository.setVolumeKeyPaging(value) }
+
+    fun setInvertVolumeKeyPaging(value: Boolean) =
+        viewModelScope.launch { settingsRepository.setInvertVolumeKeyPaging(value) }
 
     fun setBarFollowsTheme(value: Boolean) = viewModelScope.launch { settingsRepository.setBarFollowsTheme(value) }
 
@@ -327,6 +335,32 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // Only while 音量键翻页 is on: the choice means nothing otherwise, and a
+                // switch that is guaranteed to do nothing is worse than no switch. It
+                // expands into place rather than appearing outright, so the row that just
+                // arrived is legible as having come from the switch above it.
+                AnimatedVisibility(
+                    visible = state.reader.volumeKeyPaging,
+                    enter = expandVertically(animationSpec = tween(Motion.ENTER_MILLIS)) +
+                        fadeIn(animationSpec = tween(Motion.ENTER_MILLIS)),
+                    exit = shrinkVertically(animationSpec = tween(Motion.EXIT_MILLIS)) +
+                        fadeOut(animationSpec = tween(Motion.EXIT_MILLIS)),
+                    label = "invertVolumeKeys",
+                ) {
+                    Column {
+                        SwitchRow(
+                            title = "反转音量翻页",
+                            checked = state.reader.invertVolumeKeyPaging,
+                            onCheckedChange = viewModel::setInvertVolumeKeyPaging,
+                        )
+                        Text(
+                            text = "方向反过来：音量加键翻到下一页、音量减键翻回上一页。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
 
                 SwitchRow(
                     title = "阅读时保持屏幕常亮",

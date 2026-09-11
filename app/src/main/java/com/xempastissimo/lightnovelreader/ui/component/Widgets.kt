@@ -200,6 +200,11 @@ fun ShelfRow(
     modifier: Modifier = Modifier,
     trailing: @Composable (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    /**
+     * Replaces the default "已缓存到本机" line, so a caller that knows *how much* is
+     * cached can say so instead. Ignored while [offline] is false.
+     */
+    offlineText: String? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     Column(
@@ -241,7 +246,7 @@ fun ShelfRow(
             }
             if (offline) {
                 Text(
-                    text = "已缓存到本机",
+                    text = offlineText ?: "已缓存到本机",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )

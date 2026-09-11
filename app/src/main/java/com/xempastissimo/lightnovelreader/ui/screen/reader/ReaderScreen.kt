@@ -615,25 +615,27 @@ fun ReaderScreen(
             .onPreviewKeyEvent { event ->
                 if (!state.settings.volumeKeyPaging) return@onPreviewKeyEvent false
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val step = when (event.key) {
-                    Key.VolumeDown -> 1
-                    Key.VolumeUp -> -1
-                    else -> return@onPreviewKeyEvent false
-                }
+                // Which key goes forward is the user's choice ("反转音量翻页"): the stock
+                // mapping is volume-down forwards, and inverting it swaps the two rather
+                // than changing anything else about the gesture.
+                val forward = volumeKeyPageStep(
+                    key = event.key,
+                    inverted = state.settings.invertVolumeKeyPaging,
+                ) ?: return@onPreviewKeyEvent false
                 // A held volume key repeats every few frames. Acting on each repeat
                 // would restart the page animation from a position it has not reached
                 // yet, so only the first press turns a page — repeats are swallowed,
                 // which also keeps them from nudging the volume. Checked after the key
                 // itself, so repeats of unrelated keys are left alone.
                 if (event.nativeKeyEvent.repeatCount > 0) return@onPreviewKeyEvent true
-                val target = pagerState.currentPage + step
+                val target = pagerState.currentPage + forward
                 if (target in 0 until pageCount) {
                     pagerScope.launch { pagerState.animateScrollToPage(target) }
                     return@onPreviewKeyEvent true
                 }
                 // Off the end of the chapter: turn the chapter if there is one, and
                 // otherwise hand the key back so it does what a volume key normally does.
-                turnChapter(step > 0)
+                turnChapter(forward > 0)
             },
     ) {
         when {
@@ -1076,6 +1078,19 @@ private fun ReaderSettingsSheet(
 
 /** How far a drag has to travel past the end of a chapter before it turns the chapter. */
 private val CHAPTER_TURN_THRESHOLD = 56.dp
+
+/**
+ * Which way a volume key turns the page: `+1` forward, `-1` back, `null` for any other key.
+ *
+ * The stock mapping is volume-down forwards — the key under the thumb on the same edge as
+ * a "next" tap — and 反转音量翻页 swaps the two. Kept out of the key handler so the mapping,
+ * including the inversion, is testable without a device.
+ */
+internal fun volumeKeyPageStep(key: Key, inverted: Boolean): Int? = when (key) {
+    Key.VolumeDown -> if (inverted) -1 else 1
+    Key.VolumeUp -> if (inverted) 1 else -1
+    else -> null
+}
 
 /** What the reader says about the chapter it has just moved to. */
 private data class ChapterBanner(val label: String, val title: String)

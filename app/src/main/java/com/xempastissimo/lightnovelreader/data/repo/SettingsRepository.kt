@@ -37,6 +37,13 @@ data class ReaderSettings(
     val pageTurnAnimation: Boolean = true,
     /** Volume-down turns the page forward and volume-up turns it back. */
     val volumeKeyPaging: Boolean = false,
+    /**
+     * Swaps which volume key goes forward.
+     *
+     * Only meaningful while [volumeKeyPaging] is on; the setting is kept rather than
+     * cleared when paging is switched off, so turning it back on restores the choice.
+     */
+    val invertVolumeKeyPaging: Boolean = false,
     /** Paint the reader's bars with the reading theme instead of the colour below. */
     val barFollowsTheme: Boolean = false,
     /** The reader bar colour, stored as HSV because that is what the sliders edit. */
@@ -94,6 +101,8 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
             keepScreenOn = preferences[KEY_KEEP_SCREEN_ON] ?: ReaderSettings().keepScreenOn,
             pageTurnAnimation = preferences[KEY_PAGE_TURN_ANIMATION] ?: ReaderSettings().pageTurnAnimation,
             volumeKeyPaging = preferences[KEY_VOLUME_KEY_PAGING] ?: ReaderSettings().volumeKeyPaging,
+            invertVolumeKeyPaging = preferences[KEY_INVERT_VOLUME_KEY_PAGING]
+                ?: ReaderSettings().invertVolumeKeyPaging,
             barFollowsTheme = preferences[KEY_BAR_FOLLOWS_THEME] ?: ReaderSettings().barFollowsTheme,
             barHue = preferences[KEY_BAR_HUE] ?: ReaderSettings().barHue,
             barSaturation = preferences[KEY_BAR_SATURATION] ?: ReaderSettings().barSaturation,
@@ -126,6 +135,8 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
     suspend fun setPageTurnAnimation(value: Boolean) = put(KEY_PAGE_TURN_ANIMATION, value)
 
     suspend fun setVolumeKeyPaging(value: Boolean) = put(KEY_VOLUME_KEY_PAGING, value)
+
+    suspend fun setInvertVolumeKeyPaging(value: Boolean) = put(KEY_INVERT_VOLUME_KEY_PAGING, value)
 
     suspend fun setBarFollowsTheme(value: Boolean) = put(KEY_BAR_FOLLOWS_THEME, value)
 
@@ -161,6 +172,7 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
             preferences.remove(KEY_KEEP_SCREEN_ON)
             preferences.remove(KEY_PAGE_TURN_ANIMATION)
             preferences.remove(KEY_VOLUME_KEY_PAGING)
+            preferences.remove(KEY_INVERT_VOLUME_KEY_PAGING)
             preferences.remove(KEY_BAR_FOLLOWS_THEME)
             preferences.remove(KEY_BAR_HUE)
             preferences.remove(KEY_BAR_SATURATION)
@@ -181,6 +193,7 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
         val KEY_KEEP_SCREEN_ON = booleanPreferencesKey("reader_keep_screen_on")
         val KEY_PAGE_TURN_ANIMATION = booleanPreferencesKey("reader_page_turn_animation")
         val KEY_VOLUME_KEY_PAGING = booleanPreferencesKey("reader_volume_key_paging")
+        val KEY_INVERT_VOLUME_KEY_PAGING = booleanPreferencesKey("reader_invert_volume_key_paging")
         val KEY_BAR_FOLLOWS_THEME = booleanPreferencesKey("reader_bar_follows_theme")
         val KEY_BAR_HUE = floatPreferencesKey("reader_bar_hue")
         val KEY_BAR_SATURATION = floatPreferencesKey("reader_bar_saturation")

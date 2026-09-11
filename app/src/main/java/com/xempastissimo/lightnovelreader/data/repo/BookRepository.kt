@@ -13,6 +13,18 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
+ * One book's copy on disk: how many chapters it holds and what it costs in space.
+ *
+ * A summary rather than the chapter list, because the only thing that needs the
+ * numbers is a shelf row.
+ */
+data class OfflineBook(
+    val bookId: Int,
+    val chapterCount: Int,
+    val sizeBytes: Long,
+)
+
+/**
  * Offline chapter storage.
  *
  * Chapters are saved as one small JSON document per chapter under
@@ -37,6 +49,31 @@ class ChapterCache(private val rootDir: File) {
         return files.mapNotNull { file ->
             file.nameWithoutExtension.toIntOrNull()?.takeIf { file.extension == "json" && file.length() > 0 }
         }.toSet()
+    }
+
+    /**
+     * Every book with at least one chapter on disk.
+     *
+     * The shelf's own `cachedChapterIds` is a *record* of what a download wrote, and it
+     * lags behind the directory in both directions: reading a chapter online writes it to
+     * the cache without touching the record, and clearing the cache outside the app leaves
+     * the record claiming chapters that are gone. The "已缓存" tab is built from this
+     * listing instead, because a directory cannot disagree with itself — and a book that
+     * is on disk but missing from the record is one the user could not otherwise delete.
+     *
+     * A directory that is not named after a book id, or that holds no live chapter, is not
+     * an offline book. `.json.tmp` files are half-written chapters and do not count.
+     */
+    fun offlineBooks(): List<OfflineBook> {
+        val dirs = rootDir.listFiles() ?: return emptyList()
+        return dirs.mapNotNull { dir ->
+            if (!dir.isDirectory) return@mapNotNull null
+            val bookId = dir.name.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+            val chapters = dir.listFiles().orEmpty()
+                .filter { it.isFile && it.extension == "json" && it.length() > 0 }
+            if (chapters.isEmpty()) return@mapNotNull null
+            OfflineBook(bookId = bookId, chapterCount = chapters.size, sizeBytes = chapters.sumOf { it.length() })
+        }
     }
 
     suspend fun read(bookId: Int, chapterId: Int): ChapterContent? = withContext(Dispatchers.IO) {
@@ -186,6 +223,14 @@ class BookRepository(
     fun isCached(bookId: Int, chapterId: Int): Boolean = cache.isCached(bookId, chapterId)
 
     fun cachedChapterIds(bookId: Int): Set<Int> = cache.cachedChapterIds(bookId)
+
+    /**
+     * What is actually on disk, one entry per book.
+     *
+     * Suspending because it walks the library directory: callers are view models, which
+     * would otherwise read the file system on the main thread.
+     */
+    suspend fun offlineBooks(): List<OfflineBook> = withContext(Dispatchers.IO) { cache.offlineBooks() }
 
     /**
      * Downloads a book chapter by chapter, one at a time.
