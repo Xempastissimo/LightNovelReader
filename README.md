@@ -53,7 +53,7 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 │  ├─ network/HttpFetcher.kt       HttpURLConnection 封装：编码、Cookie、重试
 │  ├─ network/CookieStore.kt       持久化 cookie jar（JSON + 锁）
 │  ├─ network/RateLimiter.kt       串行限流 + 指数退避
-│  ├─ source/BookSource.kt         书源接口（6 组操作）
+│  ├─ source/BookSource.kt         书源接口（榜单/目录/详情/正文/在线书架；`bookSummary` 只取详情页元信息）
 │  ├─ source/wenku8/               首个书源的全部实现
 │  │  ├─ Wenku8Urls.kt             URL 模板 / 解析工具
 │  │  ├─ Wenku8Selectors.kt        选择器回退链（改版只改这里）
@@ -61,7 +61,7 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 │  │  └─ Wenku8Source.kt           BookSource 实现
 │  └─ repo/                        对界面暴露的仓库层
 │     ├─ BookRepository.kt         详情缓存 + 章节离线读写 + 全本下载
-│     ├─ ShelfRepository.kt        本地书架 / 阅读进度 / 搜索历史
+│     ├─ ShelfRepository.kt        本地书架 / 阅读进度 / 搜索历史 / 元信息合并
 │     ├─ SettingsRepository.kt     DataStore 偏好设置
 │     └─ ImageLoader.kt            自研图片加载（内存 LRU + 磁盘 + Referer）
 │
@@ -145,6 +145,16 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 | 书架批量操作 | `select[name=newclassid]` 所在 `<form>` | `checkid[]`＝各行复选框的 `value`，`newclassid=-1` 表示移出书架 |
 | 分页 | `div.pages` | |
 
+#### 在线书架没有封面（书架行的元信息要合并，不能覆盖）
+
+`bookcase.php` 是一张 名称 / 作者 / 最新章节 / 书签 / 更新 / 操作 的表格，**行内没有 `<img>`**，也没有指向书籍自己页面的链接，所以 `parseBookcase` 只能给出书名、作者和最新章节：`coverUrl` 为 null、`文库分类`/`文章状态`/`最后更新` 全空。
+
+后果有两条，都已修：
+
+- **同步不能整行覆盖**。`ShelfRepository.replaceOnlineEntries` 早先用站点那一行直接替换本地行，于是「打开过详情页、已经有封面」的书会在下一次同步时丢掉封面、文库和日期。现在改为 `book.mergeInto(existing)`：站点有值的字段以站点为准（书名、最新章节），站点没提的字段保留本地已有的。
+- **没打开过的书要补一次详情页**。`ShelfViewModel.backfillMissingMetadata` 在一次成功的书架同步之后，对「既没有封面、也没有文库分类和更新日期」的行各读一次 `BookSource.bookSummary`（只取 `/book/{aid}.htm`，**不读目录**），把结果落盘。它串行、受 `RateLimiter` 限速、每次最多 8 本、遇到第一个失败就停下（质询或掉登录会让后面每一本都以同样方式失败），并且会跳过本次会话里已经问过的书。
+  判定条件是「详情页能补的字段**全都没有**」，而不是「没有封面」——站点确实有书没封面，只看封面会永远重试。
+
 #### 两个 id（踩过两次的坑）
 
 同一本书在站上有**两个不同的数字**，混用会让请求「看起来成功、其实什么都没发生」：
@@ -205,7 +215,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ## 7. 测试
 
-### JVM 单元测试（`app/src/test`，134 个）
+### JVM 单元测试（`app/src/test`，139 个）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -215,7 +225,8 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | `data/network/CookieStoreTest` | domain/path/过期/`Max-Age`、持久化、原始 Cookie 导入、HTTP 日期解析 |
 | `data/network/RateLimiterTest` | 限流间隔、退避序列、重试判定（假时钟） |
 | `data/source/wenku8/Wenku8ParserTest` | 详情元信息、卷章目录、正文分块、插图与导航、登录墙识别、榜单/搜索条目（含封面取哪张）、书架、最近更新解析、封面推导、URL 工具 |
-| `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载 |
+| `data/source/wenku8/Wenku8SourceEndToEndTest` | 假 HTTP 层下的完整取数：书架总数与批量移除表单、详情→目录→正文、`bookSummary` 只读详情页而不读目录 |
+| `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载；同步**保留**站点页面没带的封面/文库/日期，`updateBook` 只补元信息、不动进度与缓存 |
 | `data/repo/ChapterCacheOfflineBooksTest` | 「已缓存」的书单来自磁盘：章节数与占用、`.json.tmp` 与空文件不算数、非书籍 id 目录忽略 |
 | `ui/screen/reader/ChapterTurnTest` | 越界滑动是否翻章、翻章方向的判定、章节切换分类逻辑 |
 | `ui/screen/reader/VolumeKeyPageStepTest` | 音量键翻页的默认方向与「反转音量翻页」的互换、其他按键不参与 |

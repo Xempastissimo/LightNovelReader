@@ -68,6 +68,16 @@ interface BookSource {
     /** Metadata plus the volume/chapter tree. */
     suspend fun detail(bookId: Int): BookDetail
 
+    /**
+     * The book's own metadata, without its chapter tree.
+     *
+     * Separate from [detail] because the two have different costs and different callers: the
+     * reader needs the tree and pays for both pages, while a list row that only wants a title,
+     * a cover and a 文库 has no use for a catalogue. The default keeps a source that has no
+     * cheaper path working; a source that does should override this.
+     */
+    suspend fun bookSummary(bookId: Int): Book = detail(bookId).book
+
     suspend fun chapterList(bookId: Int): BookDetail
 
     suspend fun content(bookId: Int, chapterId: Int, fallbackTitle: String = ""): ChapterContent

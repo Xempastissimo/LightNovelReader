@@ -169,6 +169,100 @@ class ShelfRepositoryMergeTest {
         assertEquals(42, entry.progress?.chapterId)
     }
 
+    /**
+     * The site's bookshelf page is a title, an author and a latest chapter — no cover, no
+     * 文库分类 — so a sync must *add to* what the app already knows rather than overwrite it.
+     * Assigning the incoming row over the local one is what made a book lose its cover on the
+     * sync after the reader had learned it.
+     */
+    @Test
+    fun aSyncKeepsTheMetadataTheSiteShelfPageDoesNotCarry() = runBlocking {
+        val repository = repository()
+        repository.load()
+        repository.add(
+            Book(
+                bookId = 7,
+                title = "本地读过的书",
+                coverUrl = "http://img.wenku8.com/image/3/7/7s.jpg",
+                category = "富士见文库",
+                status = "连载中",
+                updatedAt = "2026-09-09",
+            ),
+        )
+
+        repository.replaceOnlineEntries(
+            listOf(Book(bookId = 7, title = "站点书名", author = "作者甲", latestChapter = "第四卷")),
+        )
+
+        val book = repository.entry(7)!!.book
+        // The site's own fields win where it has them…
+        assertEquals("站点书名", book.title)
+        assertEquals("作者甲", book.author)
+        assertEquals("第四卷", book.latestChapter)
+        // …and everything it does not mention survives.
+        assertEquals("http://img.wenku8.com/image/3/7/7s.jpg", book.coverUrl)
+        assertEquals("富士见文库", book.category)
+        assertEquals("连载中", book.status)
+        assertEquals("2026-09-09", book.updatedAt)
+    }
+
+    /** The same merge has to survive a reload, or the cover would come back only until restart. */
+    @Test
+    fun mergedMetadataSurvivesAReload() = runBlocking {
+        val repository = repository()
+        repository.load()
+        repository.add(Book(bookId = 7, title = "本地读过的书", coverUrl = "http://img.wenku8.com/7s.jpg"))
+        repository.replaceOnlineEntries(listOf(Book(bookId = 7, title = "站点书名")))
+
+        val reloaded = repository()
+        reloaded.load()
+
+        assertEquals("站点书名", reloaded.entry(7)!!.book.title)
+        assertEquals("http://img.wenku8.com/7s.jpg", reloaded.entry(7)!!.book.coverUrl)
+    }
+
+    /**
+     * [ShelfRepository.updateBook] is how a cover read later from the book's own page reaches a
+     * shelf row. It must not disturb anything that belongs to the row rather than the book.
+     */
+    @Test
+    fun updatingOneBooksMetadataLeavesTheRestOfItsRowAlone() = runBlocking {
+        val repository = repository()
+        repository.load()
+        repository.add(Book(bookId = 7, title = "只有书名"), online = true)
+        repository.saveProgress(ReadingProgress(bookId = 7, chapterId = 42, chapterIndex = 3))
+        repository.setCachedChapters(7, setOf(42, 43))
+        val addedAt = repository.entry(7)!!.addedAt
+
+        repository.updateBook(
+            Book(
+                bookId = 7,
+                title = "只有书名",
+                coverUrl = "http://img.wenku8.com/image/3/7/7s.jpg",
+                category = "富士见文库",
+            ),
+        )
+
+        val entry = repository.entry(7)!!
+        assertEquals("http://img.wenku8.com/image/3/7/7s.jpg", entry.book.coverUrl)
+        assertEquals("富士见文库", entry.book.category)
+        assertEquals(42, entry.progress?.chapterId)
+        assertEquals(setOf(42, 43), entry.cachedChapterIds)
+        assertTrue(entry.online)
+        assertEquals(addedAt, entry.addedAt)
+    }
+
+    /** A book that is not on the shelf cannot be completed into one by a metadata read. */
+    @Test
+    fun updatingAMissingBookIsANoOp() = runBlocking {
+        val repository = repository()
+        repository.load()
+
+        repository.updateBook(Book(bookId = 999, title = "凭空的", coverUrl = "http://img.wenku8.com/9s.jpg"))
+
+        assertTrue(repository.entries.value.isEmpty())
+    }
+
     @Test
     fun mergeStateSurvivesAReload() = runBlocking {
         val repository = repository()

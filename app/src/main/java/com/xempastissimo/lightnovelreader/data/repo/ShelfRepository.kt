@@ -103,6 +103,12 @@ class ShelfRepository(
      * A book on the source's shelf *subsumes* any local copy of it: the two are the
      * same favourite, and the shelf screen now shows them in one list, so keeping
      * both would double every row the user has favourited from inside the app.
+     *
+     * The incoming rows are *sparse* — the site's bookshelf page carries a title, an author
+     * and the latest chapter and nothing else, so every cover, 文库分类, 状态 and 更新日期 it
+     * does not mention must be merged in rather than assigned over. Replacing the row used to
+     * strip a cover the app had already learned, which is why a book could show artwork on one
+     * sync and a placeholder letter on the next.
      */
     suspend fun replaceOnlineEntries(books: List<Book>) {
         val now = clock()
@@ -113,7 +119,7 @@ class ShelfRepository(
             val merged = books.mapIndexed { index, book ->
                 val existing = known[book.bookId]
                 ShelfEntry(
-                    book = book,
+                    book = existing?.let { book.mergeInto(it.book) } ?: book,
                     // An entry seen before keeps its timestamp so the merged shelf does
                     // not reshuffle on every sync; a newly discovered one is stamped
                     // "now", minus its position so the site's own ordering survives.
@@ -124,6 +130,23 @@ class ShelfRepository(
                 )
             }
             localOnly + merged
+        }
+    }
+
+    /**
+     * Refreshes one book's metadata, leaving the rest of its row alone.
+     *
+     * Used when a fuller description of a book arrives after its shelf row was written —
+     * a detail page read to fill in a cover, say. Progress, cached chapters and the online
+     * flag all belong to the row rather than to the metadata, so they are carried across.
+     */
+    suspend fun updateBook(book: Book) = mutate { current ->
+        current.map { entry ->
+            if (entry.book.bookId == book.bookId) {
+                entry.copy(book = book.mergeInto(entry.book))
+            } else {
+                entry
+            }
         }
     }
 

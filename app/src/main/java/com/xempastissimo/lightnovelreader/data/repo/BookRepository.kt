@@ -5,6 +5,7 @@ import com.xempastissimo.lightnovelreader.core.json.Json
 import com.xempastissimo.lightnovelreader.data.network.HttpFailure
 import com.xempastissimo.lightnovelreader.data.network.HttpFetcher
 import com.xempastissimo.lightnovelreader.data.source.BookSource
+import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.BookDetail
 import com.xempastissimo.lightnovelreader.domain.model.ChapterContent
 import com.xempastissimo.lightnovelreader.domain.model.ContentBlock
@@ -201,6 +202,14 @@ class BookRepository(
     }
 
     fun cachedDetail(bookId: Int): BookDetail? = detailCache[bookId]
+
+    /**
+     * A book's metadata on its own, without the chapter tree.
+     *
+     * Used to complete shelf rows the source's bookshelf page described only as a title and
+     * an author; deliberately not cached in [detailCache], which holds full details.
+     */
+    suspend fun bookSummary(bookId: Int): Book = source.bookSummary(bookId)
 
     suspend fun content(
         bookId: Int,

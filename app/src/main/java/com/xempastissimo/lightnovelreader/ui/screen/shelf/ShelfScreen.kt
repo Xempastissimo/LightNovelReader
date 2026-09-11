@@ -73,6 +73,7 @@ import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.ShelfRow
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -158,6 +159,19 @@ class ShelfViewModel(
 
     /** A sync is in flight; used to stop the resume hook starting a second one. */
     private var syncInFlight = false
+
+    /** The metadata backfill pass, while one is running. */
+    private var metadataBackfillJob: Job? = null
+
+    /**
+     * Books this session has already asked the source about.
+     *
+     * In memory on purpose: [Book.needsFullerMetadata] is what decides a book is unknown, and
+     * a book the site simply has no description for would keep satisfying it. Persisting a
+     * "asked and got nothing" marker would mean another field in `shelf.json` for a case one
+     * bounded retry per app start already covers.
+     */
+    private val metadataAttempted = HashSet<Int>()
 
     init {
         _state.update { it.copy(loggedIn = source.isLoggedIn(), onlineCapacity = source.onlineShelfCapacity) }
@@ -263,6 +277,9 @@ class ShelfViewModel(
                             message = if (quiet) null else "已同步 ${shelf.entries.size} 本",
                         )
                     }
+                    // The rows just written are as thin as the site's bookshelf page is; this
+                    // is the only moment the app knows which books are missing a description.
+                    backfillMissingMetadata(shelf.entries.map { it.book })
                 }
                 .onFailure { error ->
                     syncedWhileLoggedIn = false
@@ -282,6 +299,61 @@ class ShelfViewModel(
             syncInFlight = false
         }
     }
+
+    // ------------------------------------------------------------------ metadata
+
+    /**
+     * Completes the rows the site's own bookshelf page left half-empty.
+     *
+     * `bookcase.php` is a table of 名称 / 作者 / 最新章节 and nothing else — no cover image and
+     * no link to the book's own page — so a favourite that has never been opened in this app
+     * arrives as a bare title and is drawn with the placeholder letter instead of artwork.
+     * One read of the book's detail page fills in the cover, the 文库分类, the 状态 and the
+     * 最后更新, and the result is persisted, so it costs the site one page per book ever.
+     *
+     * Deliberately bounded and unspectacular:
+     *  * serial, through the source's own rate limiter — never a burst;
+     *  * at most [MAX_METADATA_BACKFILL] books per pass, so a 300-book shelf is completed
+     *    a few at a time across syncs rather than in one long crawl;
+     *  * it stops at the first failure. A browser challenge or a lost session fails every
+     *    remaining book identically, and asking the same question eight more times is exactly
+     *    the behaviour the site's throttling is there to discourage.
+     */
+    private fun backfillMissingMetadata(books: List<Book>) {
+        if (metadataBackfillJob?.isActive == true) return
+        val pending = books
+            .filter { it.needsFullerMetadata() }
+            .map { it.bookId }
+            .filterNot { it in metadataAttempted }
+            .take(MAX_METADATA_BACKFILL)
+        if (pending.isEmpty()) return
+
+        metadataBackfillJob = viewModelScope.launch {
+            var filled = 0
+            for (bookId in pending) {
+                // Recorded before the attempt, not after: a book the site has no cover for
+                // would otherwise be asked about again on every pass, forever.
+                metadataAttempted += bookId
+                val summary = runCatching { bookRepository.bookSummary(bookId) }.getOrNull() ?: break
+                shelfRepository.updateBook(summary)
+                filled++
+            }
+            if (filled > 0) {
+                _state.update { it.copy(message = "已补全 $filled 本书的封面与文库信息") }
+            }
+        }
+    }
+
+    /**
+     * Whether a row is still only what the bookshelf page could say about it.
+     *
+     * The test is the *absence of everything the detail page adds*, not the absence of a
+     * cover alone: some books genuinely have no cover on the site, and keying on the cover
+     * would retry those forever. Once a book has a 文库分类 or an 更新日期 the app has read
+     * its own page, and there is nothing more to learn.
+     */
+    private fun Book.needsFullerMetadata(): Boolean =
+        coverUrl.isNullOrBlank() && category.isBlank() && updatedAt.isBlank()
 
     // ------------------------------------------------------------------ selection
 
@@ -416,6 +488,14 @@ class ShelfViewModel(
     }
 
     companion object {
+        /**
+         * How many books one metadata backfill pass may read.
+         *
+         * Every one of them is a page load against a site that throttles, so this is a
+         * "few at a time" figure rather than a "finish the shelf" one.
+         */
+        private const val MAX_METADATA_BACKFILL = 8
+
         fun factory(container: AppContainer) = AppViewModelFactory<ShelfViewModel> {
             ShelfViewModel(it.shelfRepository, it.bookRepository, it.bookSource)
         }

@@ -289,6 +289,33 @@ class Wenku8SourceEndToEndTest {
         )
     }
 
+    /**
+     * The cheap metadata read: a shelf row wants the detail page's cover and 文库, not the
+     * catalogue behind it, and the source has to be able to supply one without the other.
+     */
+    @Test
+    fun `book summary reads the detail page without the catalogue`() = runBlocking {
+        val (source, fetcher) = sourceWith(
+            mapOf(
+                "/book/3988.htm" to detailHtml,
+                "/novel/3/3988/index.htm" to tocHtml,
+            ),
+        )
+
+        val book = source.bookSummary(3988)
+
+        assertEquals("测试小说", book.title)
+        assertEquals("作者甲", book.author)
+        assertEquals("测试文库", book.category)
+        assertEquals("连载中", book.status)
+        assertEquals("2026-01-02", book.updatedAt)
+        assertEquals("http://img.wenku8.com/image/3/3988/3988s.jpg", book.coverUrl)
+        assertFalse(
+            "a summary must not pay for the catalogue page, got ${fetcher.requested}",
+            fetcher.requested.any { it.contains("index.htm") },
+        )
+    }
+
     @Test
     fun `chapter content is fetched from the derived prefix`() = runBlocking {
         val (source, fetcher) = sourceWith(

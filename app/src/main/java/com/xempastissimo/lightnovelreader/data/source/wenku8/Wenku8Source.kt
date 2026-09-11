@@ -170,6 +170,20 @@ class Wenku8Source(
      */
     override suspend fun detail(bookId: Int): BookDetail = loadDetailAndChapters(bookId)
 
+    /**
+     * The detail page alone.
+     *
+     * Everything a shelf row shows — cover, 文库分类, 文章状态, 最后更新 — is on this one page;
+     * the catalogue is a second load the caller here does not need. Used to fill in books the
+     * site's own bookshelf lists as nothing but a title and an author (see
+     * `ShelfViewModel.backfillMissingMetadata`).
+     */
+    override suspend fun bookSummary(bookId: Int): Book {
+        val html = http.getText(Wenku8Urls.book(bookId), referer = Wenku8Urls.INDEX)
+        return Wenku8Parser.parseBookDetail(html, bookId)?.book
+            ?: throw HttpFailure.Status(200, "无法解析书籍信息（页面结构可能已变更）")
+    }
+
     override suspend fun chapterList(bookId: Int): BookDetail = loadDetailAndChapters(bookId)
 
     private suspend fun loadDetailAndChapters(bookId: Int): BookDetail {
