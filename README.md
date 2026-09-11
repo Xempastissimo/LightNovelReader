@@ -6,6 +6,21 @@
 
 书源是[轻小说文库](https://www.wenku8.net/)，实现细节集中在一个抽换点，接第二个源不需要改任何界面代码。
 
+**当前版本**：`v0.1-alpha`（首个预发布版）。GitHub Release 用标签 `v0.1-alpha` 发布，并勾选 **Pre-release**；应用内 `versionName = "0.1-alpha"`、`versionCode = 1`。
+
+## 目录
+
+- [1. 做这个项目的灵感](#1-做这个项目的灵感)
+- [2. 快速开始](#2-快速开始)
+- [3. 目录结构](#3-目录结构)
+- [4. 分层与数据流](#4-分层与数据流)
+- [5. 书源映射（wenku8）](#5-书源映射wenku8)
+- [6. 抓取策略与边界](#6-抓取策略与边界)
+- [7. 测试](#7-测试)
+- [8. 已知限制（有意为之）](#8-已知限制有意为之)
+- [9. 验证记录](#9-验证记录)
+- [10. 许可与使用边界](#10-许可与使用边界)
+
 ---
 
 ## 1. 做这个项目的灵感
@@ -25,13 +40,14 @@
 
 | 组件 | 版本 |
 |---|---|
+| 应用自身（`versionName`） | 0.1-alpha（GitHub 标签 `v0.1-alpha`，预发布） |
 | Gradle / AGP | 9.4.1 / 9.2.1 |
 | Kotlin | 2.2.10 |
 | Compose BOM | 2026.02.01 |
 | compileSdk / minSdk | 36.1 / 26 |
 | JVM toolchain | 21 |
 
-版本统一在 `gradle/libs.versions.toml`，不要在 `app/build.gradle.kts` 里写死。
+依赖版本统一在 `gradle/libs.versions.toml`，不要在 `app/build.gradle.kts` 里写死；应用自身的版本号是例外，写在 `app/build.gradle.kts` 的 `defaultConfig`（当前 `0.1-alpha`）。
 
 ---
 

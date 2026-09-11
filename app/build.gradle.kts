@@ -16,7 +16,9 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        // 预发布版本：GitHub Release 的标签为 v0.1-alpha（versionName 按
+        // Android 惯例不带 v 前缀，tag 才带）。
+        versionName = "0.1-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
