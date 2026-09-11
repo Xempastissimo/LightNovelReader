@@ -11,15 +11,17 @@
 ## 目录
 
 - [1. 做这个项目的灵感](#1-做这个项目的灵感)
-- [2. 快速开始](#2-快速开始)
-- [3. 目录结构](#3-目录结构)
-- [4. 分层与数据流](#4-分层与数据流)
-- [5. 书源映射（wenku8）](#5-书源映射wenku8)
-- [6. 抓取策略与边界](#6-抓取策略与边界)
-- [7. 测试](#7-测试)
-- [8. 已知限制（有意为之）](#8-已知限制有意为之)
-- [9. 验证记录](#9-验证记录)
-- [10. 许可与使用边界](#10-许可与使用边界)
+- [2. 页面展示](#2页面展示)
+- [3. 功能说明](#3-功能说明)
+- [4. 快速开始](#4-快速开始)
+- [5. 目录结构](#5-目录结构)
+- [6. 分层与数据流](#6-分层与数据流)
+- [7. 书源映射（wenku8）](#7-书源映射wenku8)
+- [8. 抓取策略与边界](#8-抓取策略与边界)
+- [9. 测试](#9-测试)
+- [10. 已知限制（有意为之）](#10-已知限制有意为之)
+- [11. 验证记录](#11-验证记录)
+- [12. 许可与使用边界](#12-许可与使用边界)
 
 ---
 
@@ -29,7 +31,22 @@
 
 ---
 
-## 2. 快速开始
+## 2.页面展示
+
+<img src="./assets/image-20260911203600513.png" alt="image-20260911203600513" style="zoom: 33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911203811917.png" alt="image-20260911203811917" style="zoom: 33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911203928708.png" alt="image-20260911203928708" style="zoom:33%;" /><img src="D:/DevelopmentTools/AndroidStudioProjects/LightNovelReader/assets/image-20260911204018405.png" alt="image-20260911204018405" style="zoom:33%;" />
+
+## 3. 功能说明
+
+- 书源可插拔，当前接入轻小说文库（wenku8），新增书源只需实现 `BookSource` 接口
+- 登录方式：原生表单 / 浏览器登录（人机校验）/ 手动粘贴 Cookie
+- 发现页：榜单与最近更新
+- 搜索：标题/作者搜索 + 搜索历史
+- 书籍详情：封面、元信息、卷章目录、缓存全本
+- 书架：继续阅读（本地阅读记录）/ 在线书架 / 已缓存（本机已下载章节）
+- 阅读器：翻页阅读 + 目录跳转 + 阅读设置面板 + 章节切换横幅提示 + 音量键翻页（含反转）
+- 设置：账号管理、阅读外观（顶底栏配色、音量键翻页）、深色模式、存储管理、书源说明
+
+## 4. 快速开始
 
 ```bash
 .\gradlew.bat assembleDebug          # 构建 debug APK
@@ -40,18 +57,17 @@
 
 | 组件 | 版本 |
 |---|---|
-| 应用自身（`versionName`） | 0.1-alpha（GitHub 标签 `v0.1-alpha`，预发布） |
 | Gradle / AGP | 9.4.1 / 9.2.1 |
 | Kotlin | 2.2.10 |
 | Compose BOM | 2026.02.01 |
 | compileSdk / minSdk | 36.1 / 26 |
 | JVM toolchain | 21 |
 
-依赖版本统一在 `gradle/libs.versions.toml`，不要在 `app/build.gradle.kts` 里写死；应用自身的版本号是例外，写在 `app/build.gradle.kts` 的 `defaultConfig`（当前 `0.1-alpha`）。
+版本统一在 `gradle/libs.versions.toml`，不要在 `app/build.gradle.kts` 里写死。
 
 ---
 
-## 3. 目录结构
+## 5. 目录结构
 
 ```
 app/src/main/java/com/xempastissimo/lightnovelreader/
@@ -101,7 +117,7 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 
 ---
 
-## 4. 分层与数据流
+## 6. 分层与数据流
 
 ```
 Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) ──> HttpFetcher
@@ -117,11 +133,11 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 
 ---
 
-## 5. 书源映射（wenku8）
+## 7. 书源映射（wenku8）
 
 下表是**在真实站点上核实过**的页面结构（登录后逐页用浏览器 DOM 探查），改版时按它对照 `Wenku8Selectors.kt`。
 
-### 5.1 URL
+### 7.1 URL
 
 | 用途 | 形式 |
 |---|---|
@@ -133,13 +149,13 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 | 搜索 | `/modules/article/search.php?searchtype={articlename,author}&searchkey={GBK 编码}` | 与榜单同一套条目结构（结果行自带封面），因此走同一个解析器 |
 | 在线书架 | `/modules/article/bookcase.php` |
 | 书架分组 | `?classid=1` … `?classid=5`（连同默认组共 6 组）。**app 暂不呈现分组**，只读写默认组；页头的总数涵盖全部分组，所以计数是全账号的，只有列表是默认组的 |
-| **移出一本** | `/modules/article/bookcase.php?delid={shelfId}` —— 页面每行的「移除」就是这个地址（`document.location` 写在 `javascript:` href 里）。**`shelfId` 不是书籍 id**，见 4.4「两个 id」 |
+| **移出一本** | `/modules/article/bookcase.php?delid={shelfId}` —— 页面每行的「移除」就是这个地址（`document.location` 写在 `javascript:` href 里）。**`shelfId` 不是书籍 id**，见「两个 id」 |
 | **批量移出** | 提交页面自带的 `<form action="" method="post" id="checkform">`：`checkid[]`（每个勾选项的 `shelfId` 各出现一次）+ `newclassid=-1`（`-1`＝移出书架，`0`～`5`＝移到分组）+ 表单隐藏字段 `clsssid` + 提交按钮 `btnsubmit`。字段名全部从页面读出，不写死 |
 | 加入书架 | `/modules/article/addbookcase.php?bid={aid}` —— 这里的 `bid` **就是书籍 id**，与移出时的同名字段含义不同；先取页面自身的 `a[href*=addbookcase]`，取不到才退回该地址 |
 | 登录 | `/login.php?do=submit&jumpurl=...` |
 | 书架上限 | 页头写着「您的书架可收藏 300 本」，由站点强制；`Wenku8Source.MAX_BOOKCASE_BOOKS` 只是页头读不到时的兜底 |
 
-### 4.2 选择器
+### 7.2 选择器
 
 | 数据 | 定位方式 | 备注 |
 |---|---|---|
@@ -182,7 +198,7 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 
 app 内部一律用书籍 id（`Book.bookId`）。移出书架只接受**书架 id**，所以必须先用 `Wenku8Parser.parseBookcaseRowIds` 从页面读出配对，不能拿书籍 id 去拼 URL。
 
-### 4.3 登录
+### 7.3 登录
 
 - 表单字段：`username`、`password`、`usecookie`、`action=login`；提交到 `/login.php?do=submit`。
 - **`usecookie` 的值是秒数**（`0` / `86400` / `2592000` / `315360000`），不是序号 —— 这点已在真站核实。
@@ -191,7 +207,7 @@ app 内部一律用书籍 id（`Book.bookId`）。移出书架只接受**书架 
 
 ---
 
-## 6. 抓取策略与边界
+## 8. 抓取策略与边界
 
 - **串行 + 限速**：所有请求经过一个 `RateLimiter`，最小间隔 900ms，`429/403/5xx` 指数退避后重试，最多 3 次。
 - **批量下载是串行的**：`BookRepository.downloadBook` 逐章下载并回报进度，不做并发抓取。
@@ -203,7 +219,7 @@ app 内部一律用书籍 id（`Book.bookId`）。移出书架只接受**书架 
   2. 「手动粘贴 Cookie」——从已登录的浏览器复制 `PHPSESSID`/`jieqiUserInfo` 等；
   3. 「在系统浏览器中打开登录页」——登录后回到应用粘贴 Cookie，用于 WebView 被拒的场景。
 
-### 6.1 两条传输通道与「浏览器内核」取数
+### 8.1 两条传输通道与「浏览器内核」取数
 
 本机与真机都实测到：**`HttpURLConnection` 一律 403，而应用自带的 WebView 内核能拿到页面**
 （真机实测 `chars≈32827, signedIn=true, challengePage=false`）。现代 Cloudflare 校验的是
@@ -229,7 +245,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ---
 
-## 7. 测试
+## 9. 测试
 
 ### JVM 单元测试（`app/src/test`，139 个）
 
@@ -257,12 +273,12 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ---
 
-## 8. 已知限制（有意为之）
+## 10. 已知限制（有意为之）
 
 | 限制 | 说明与后续方向 |
 |---|---|
 | **分页按字符预算** | 阅读器用「每页约 520 字」估算，而非真实文本测量。好处是确定性、不依赖布局回调、重新分页后阅读位置稳定。后续可换成 `TextMeasurer` 真实分页，只需改 `ReaderViewModel.paginate`。 |
-| **模拟器上无法直连书源** | Cloudflare 会对模拟器出口 IP 直接发质询（`Cf-Mitigated: challenge`）。应用已改为**通过自带的浏览器内核取页面**（见 §5.1），但**全新会话仍需在 WebView 里人工完成一次校验**：质询页的 JS 需要真实浏览器环境执行，冷启动的 WebView 会停在 `Just a moment...`。请先走一次「设置 → 账号 → 使用浏览器登录」，之后应用即可正常取数。真机同理。 |
+| **模拟器上无法直连书源** | Cloudflare 会对模拟器出口 IP 直接发质询（`Cf-Mitigated: challenge`）。应用已改为**通过自带的浏览器内核取页面**（见 §8.1），但**全新会话仍需在 WebView 里人工完成一次校验**：质询页的 JS 需要真实浏览器环境执行，冷启动的 WebView 会停在 `Just a moment...`。请先走一次「设置 → 账号 → 使用浏览器登录」，之后应用即可正常取数。真机同理。 |
 | **浏览器内核通道的限制** | 每次取页面都会新建并销毁一个 WebView，比原生通道慢得多；且需要应用处于前台（后台时页面读取会明确失败）。图片与表单提交仍走原生通道。 |
 | **作者/榜单元信息不完整** | 榜单条目里的作者是可选字段，站点部分板块不提供。 |
 | **繁体版未接入** | 站点支持 `?charset=big5`，URL 层已预留，未做界面开关。 |
@@ -284,7 +300,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ---
 
-## 9. 验证记录
+## 11. 验证记录
 
 在一台 `Small_Phone`（API 36, x86_64）模拟器上：
 
@@ -305,6 +321,6 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ---
 
-## 10. 许可与使用边界
+## 12. 许可与使用边界
 
 本项目是**阅读器框架**，不包含也不分发任何小说正文。本项目与[轻小说文库](https://www.wenku8.net/)的所有者无关，请遵守该站点的服务条款与当地法律，仅作个人阅读使用，请不要利用此项目进行任何有违道德或法律的行为！！！
