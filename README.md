@@ -77,10 +77,10 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
       ├─ discover/                 榜单与最近更新
       ├─ search/                   标题/作者搜索 + 历史
       ├─ detail/                   封面、元信息、卷章目录、缓存全本
-      ├─ shelf/                    继续阅读（本地阅读记录）/ 书架（**只显示站点账号里的收藏**）
-      ├─ settings/                 账号、阅读外观（含顶底栏配色、音量键翻页）、深色模式、存储、书源说明
+      ├─ shelf/                    继续阅读（本地阅读记录）/ 书架（**只显示站点账号里的收藏**）/ 已缓存（本机已下载的章节）
+      ├─ settings/                 账号、阅读外观（含顶底栏配色、音量键翻页与反转）、深色模式、存储、书源说明
       ├─ login/                    原生表单 + 浏览器登录（人机校验）+ 粘贴 Cookie
-      └─ reader/                   翻页阅读器 + 目录 + 阅读设置面板
+      └─ reader/                   翻页阅读器 + 目录 + 阅读设置面板 + 章节切换横幅提示
 ```
 
 ---
@@ -205,7 +205,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ## 7. 测试
 
-### JVM 单元测试（`app/src/test`，94 个）
+### JVM 单元测试（`app/src/test`，134 个）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -215,6 +215,10 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | `data/network/CookieStoreTest` | domain/path/过期/`Max-Age`、持久化、原始 Cookie 导入、HTTP 日期解析 |
 | `data/network/RateLimiterTest` | 限流间隔、退避序列、重试判定（假时钟） |
 | `data/source/wenku8/Wenku8ParserTest` | 详情元信息、卷章目录、正文分块、插图与导航、登录墙识别、榜单/搜索条目（含封面取哪张）、书架、最近更新解析、封面推导、URL 工具 |
+| `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载 |
+| `data/repo/ChapterCacheOfflineBooksTest` | 「已缓存」的书单来自磁盘：章节数与占用、`.json.tmp` 与空文件不算数、非书籍 id 目录忽略 |
+| `ui/screen/reader/ChapterTurnTest` | 越界滑动是否翻章、翻章方向的判定、章节切换分类逻辑 |
+| `ui/screen/reader/VolumeKeyPageStepTest` | 音量键翻页的默认方向与「反转音量翻页」的互换、其他按键不参与 |
 
 解析类测试使用**结构等价、文案中性**的 HTML 片段（与真实页面的标签/类名/嵌套一致），不保存站点正文。
 
@@ -236,6 +240,8 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | **作者/榜单元信息不完整** | 榜单条目里的作者是可选字段，站点部分板块不提供。 |
 | **繁体版未接入** | 站点支持 `?charset=big5`，URL 层已预留，未做界面开关。 |
 | **无 WorkManager 后台下载** | 缓存全本在进程内串行执行，退到后台可能被系统暂停；后续可迁到前台服务/WorkManager（需新增依赖）。 |
+| **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
+| **「已缓存」按磁盘目录统计** | 书单来自 `ChapterCache.offlineBooks()`（`library/{bookId}/*.json`），而不是书架行里的 `cachedChapterIds` 记录 —— 后者只在「缓存全本」完成时写入，在线阅读缓存的章节不会记进去。两者不一致时以磁盘为准。 |
 | **无书源插件化** | 目前靠 `BookSource` 接口 + 手写实现；脚本化书源（规则引擎）刻意没做。 |
 | **依赖全为本地缓存** | 本机当时无法访问 Maven Central，因此没有引入 okhttp/jsoup/coil/room；已有实现全部自研或使用框架 API。若网络可达，可按需替换（见下）。 |
 
