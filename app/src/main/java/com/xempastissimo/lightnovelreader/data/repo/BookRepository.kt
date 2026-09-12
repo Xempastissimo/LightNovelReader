@@ -175,6 +175,7 @@ class ChapterCache(private val rootDir: File) {
 class BookRepository(
     private val source: BookSource,
     private val cache: ChapterCache,
+    private val packs: PackStore,
 ) {
 
     private val detailCache = HashMap<Int, BookDetail>(8)
@@ -184,6 +185,9 @@ class BookRepository(
     /** Whether the underlying source currently holds a signed-in session. */
     fun isLoggedIn(): Boolean = source.isLoggedIn()
 
+    /** Whether the source publishes whole-book packs, i.e. whether to offer the download. */
+    val supportsPackDownload: Boolean get() = source.supportsPackDownload
+
     suspend fun rank(type: com.xempastissimo.lightnovelreader.domain.model.RankType, page: Int = 1) =
         source.rank(type, page)
 
@@ -192,11 +196,24 @@ class BookRepository(
     suspend fun search(keyword: String, field: com.xempastissimo.lightnovelreader.domain.model.SearchField) =
         source.search(keyword, field)
 
-    /** Cached detail: re-entering a book does not re-fetch two pages. */
+    /**
+     * Cached detail: re-entering a book does not re-fetch two pages.
+     *
+     * When the source cannot be reached, a book that has been downloaded whole falls back
+     * to the catalogue stored with its pack — that is what lets a downloaded book be
+     * opened with no network at all, which a merely cached one cannot. The fallback is
+     * deliberately not put into [detailCache]: the next read should try the source again
+     * rather than keep serving a snapshot.
+     */
     suspend fun detail(bookId: Int, forceRefresh: Boolean = false): BookDetail {
         val cached = detailCache[bookId]
         if (!forceRefresh && cached != null && cached.chapters.isNotEmpty()) return cached
-        val detail = source.detail(bookId)
+        val detail = try {
+            source.detail(bookId)
+        } catch (error: Throwable) {
+            packs.book(bookId)?.tocDetail()?.takeIf { it.chapters.isNotEmpty() }?.let { return it }
+            throw error
+        }
         detailCache[bookId] = detail
         return detail
     }
@@ -219,6 +236,7 @@ class BookRepository(
     ): ChapterContent {
         if (!forceRefresh) {
             cache.read(bookId, chapterId)?.let { return it }
+            packChapter(bookId, chapterId, fallbackTitle)?.let { return it }
         }
         val content = source.content(bookId, chapterId, fallbackTitle)
         if (content.requiresLogin) {
@@ -228,10 +246,44 @@ class BookRepository(
         return content
     }
 
-    /** True when the chapter is available offline. */
-    fun isCached(bookId: Int, chapterId: Int): Boolean = cache.isCached(bookId, chapterId)
+    /**
+     * One chapter out of the downloaded pack, or null when there is no pack entry for it.
+     *
+     * The pack is consulted *after* the chapter cache and *before* the network: a chapter
+     * that was cached online may carry illustrations the pack never has, while a chapter
+     * that only exists in the pack must not cost a request. This is also what keeps a
+     * downloaded book readable after 设置 → 存储 → 清理离线章节.
+     */
+    private suspend fun packChapter(bookId: Int, chapterId: Int, fallbackTitle: String): ChapterContent? {
+        val record = packs.book(bookId) ?: return null
+        val chapters = record.volumes.flatMap { it.chapters }
+        val position = chapters.indexOfFirst { it.chapterId == chapterId }
+        if (position < 0) return null
+        val paragraphs = packs.readChapter(bookId, chapterId) ?: return null
+        if (paragraphs.isEmpty()) return null
+        val chapter = chapters[position]
+        return ChapterContent(
+            bookId = bookId,
+            chapterId = chapterId,
+            title = chapter.title.ifBlank { fallbackTitle },
+            volumeTitle = chapter.volumeTitle,
+            blocks = paragraphs.map { ContentBlock.Paragraph(it) },
+            previousChapterId = chapters.getOrNull(position - 1)?.chapterId,
+            nextChapterId = chapters.getOrNull(position + 1)?.chapterId,
+        )
+    }
 
-    fun cachedChapterIds(bookId: Int): Set<Int> = cache.cachedChapterIds(bookId)
+    /**
+     * True when the chapter is available offline.
+     *
+     * Counts the downloaded pack as well as the chapter cache: a book downloaded whole is
+     * readable offline even after its cached chapters have been cleared.
+     */
+    fun isCached(bookId: Int, chapterId: Int): Boolean =
+        cache.isCached(bookId, chapterId) || packs.chapterIds(bookId).contains(chapterId)
+
+    fun cachedChapterIds(bookId: Int): Set<Int> =
+        cache.cachedChapterIds(bookId) + packs.chapterIds(bookId)
 
     /**
      * What is actually on disk, one entry per book.
@@ -267,6 +319,84 @@ class BookRepository(
     }
 
     suspend fun deleteOfflineCopy(bookId: Int) = cache.deleteBook(bookId)
+
+    // ------------------------------------------------------------------ pack download
+
+    /** Downloaded books, most recent first. */
+    fun downloadedBooks(): List<DownloadedBook> = packs.books.value
+
+    fun downloadedBook(bookId: Int): DownloadedBook? = packs.book(bookId)
+
+    fun totalPackSizeBytes(): Long = packs.totalSizeBytes()
+
+    /** Re-reads the pack directory; cheap enough to run whenever a screen comes back. */
+    suspend fun refreshPacks() = packs.load()
+
+    /**
+     * Downloads a book's whole text as the source publishes it, then imports it.
+     *
+     * One request for the whole book — that is the point of the feature: the site's own
+     * pack replaces a page load per chapter. The pack file is kept, and its chapters are
+     * also written into the chapter cache so that reading does not depend on the pack
+     * machinery at all.
+     */
+    suspend fun downloadPack(
+        bookId: Int,
+        detail: BookDetail,
+        onPhase: (String) -> Unit = {},
+    ): DownloadedBook {
+        onPhase("正在下载整本…")
+        val packed = source.downloadPack(bookId, detail)
+            ?: throw HttpFailure.Status(501, "${source.displayName} 未提供整本下载")
+        val record = packs.save(packed, detail)
+        importPack(record, onPhase)
+        return record
+    }
+
+    /**
+     * Writes the pack's chapters into the offline cache.
+     *
+     * A chapter already cached *with illustrations* is left alone: the pack has no images
+     * (the source's own txt has none either), so overwriting one with the pack's empty
+     * illustration chapter would lose the artwork for no gain.
+     */
+    private suspend fun importPack(record: DownloadedBook, onPhase: (String) -> Unit) {
+        val chapters = record.volumes.flatMap { it.chapters }
+        val pending = chapters.filter { record.slices.containsKey(it.chapterId) }
+        var done = 0
+        for ((position, chapter) in chapters.withIndex()) {
+            if (!record.slices.containsKey(chapter.chapterId)) continue
+            done++
+            onPhase("正在导入 $done/${pending.size} 章…")
+            val existing = cache.read(record.bookId, chapter.chapterId)
+            if (existing != null && existing.illustrations.isNotEmpty()) continue
+            val paragraphs = packs.readChapter(record.bookId, chapter.chapterId).orEmpty()
+            if (paragraphs.isEmpty()) continue
+            cache.write(
+                ChapterContent(
+                    bookId = record.bookId,
+                    chapterId = chapter.chapterId,
+                    title = chapter.title,
+                    volumeTitle = chapter.volumeTitle,
+                    blocks = paragraphs.map { ContentBlock.Paragraph(it) },
+                    previousChapterId = chapters.getOrNull(position - 1)?.chapterId,
+                    nextChapterId = chapters.getOrNull(position + 1)?.chapterId,
+                ),
+            )
+        }
+    }
+
+    /** Deletes the pack file and its index; the imported chapters are [deleteOfflineCopy]'s job. */
+    suspend fun deletePack(bookId: Int) = packs.delete(bookId)
+
+    /**
+     * Deletes every local copy of a book: the imported chapters, the chapter cache and the
+     * downloaded pack.
+     */
+    suspend fun deleteLocalCopy(bookId: Int) {
+        cache.deleteBook(bookId)
+        packs.delete(bookId)
+    }
 
     fun offlineSizeBytes(bookId: Int): Long = cache.bookSizeBytes(bookId)
 

@@ -15,10 +15,10 @@ android {
         applicationId = "com.xempastissimo.lightnovelreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        // 预发布版本：GitHub Release 的标签为 v0.1.1-alpha（versionName 按
+        versionCode = 3
+        // 预发布版本：GitHub Release 的标签为 v0.1.2-alpha（versionName 按
         // Android 惯例不带 v 前缀，tag 才带）。
-        versionName = "0.1.1-alpha"
+        versionName = "0.1.2-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

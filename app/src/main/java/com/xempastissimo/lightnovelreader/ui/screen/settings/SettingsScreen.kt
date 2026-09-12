@@ -83,6 +83,9 @@ data class SettingsUiState(
     val app: AppSettings = AppSettings(),
     val session: UserSession? = null,
     val offlineBytes: Long = 0L,
+    /** Whole-book packs: how many, and what they cost. */
+    val packCount: Int = 0,
+    val packBytes: Long = 0L,
     val imageCacheBytes: Long = 0L,
     val message: String? = null,
     val probing: Boolean = false,
@@ -119,6 +122,8 @@ class SettingsViewModel(
                 it.copy(
                     session = source.currentSession(),
                     offlineBytes = container.bookRepository.totalOfflineSizeBytes(),
+                    packCount = container.bookRepository.downloadedBooks().size,
+                    packBytes = container.bookRepository.totalPackSizeBytes(),
                     imageCacheBytes = container.imageLoader.diskCacheSize(),
                 )
             }
@@ -178,6 +183,21 @@ class SettingsViewModel(
             container.chapterCache.clear()
             refreshAccountAndCache()
             _state.update { it.copy(message = "离线章节已清理") }
+        }
+    }
+
+    /**
+     * Deletes the downloaded whole-book packs.
+     *
+     * Only the packs: a downloaded book keeps working after this, because its chapters were
+     * imported when it was downloaded and the reader prefers those. What goes is the second
+     * copy of the text — the archive — which is the thing this button exists to reclaim.
+     */
+    fun clearPacks() {
+        viewModelScope.launch {
+            container.packStore.clear()
+            refreshAccountAndCache()
+            _state.update { it.copy(message = "整本下载已清理") }
         }
     }
 
@@ -256,6 +276,7 @@ fun SettingsScreen(
             onDynamicColor = viewModel::setDynamicColor,
             onClearImageCache = viewModel::clearImageCache,
             onClearOfflineBooks = viewModel::clearOfflineBooks,
+            onClearPacks = viewModel::clearPacks,
             onProbeBrowserEngine = viewModel::probeBrowserEngine,
         ),
     )
@@ -292,6 +313,7 @@ data class SettingsActions(
     val onDynamicColor: (Boolean) -> Unit = {},
     val onClearImageCache: () -> Unit = {},
     val onClearOfflineBooks: () -> Unit = {},
+    val onClearPacks: () -> Unit = {},
     val onProbeBrowserEngine: () -> Unit = {},
 )
 
@@ -487,8 +509,18 @@ fun SettingsContent(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
+                    text = "整本下载：${state.packCount} 本 · ${formatBytes(state.packBytes)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
                     text = "图片缓存：${formatBytes(state.imageCacheBytes)}",
                     style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "「整本下载」是站点打包的 txt，与导入的章节各占一份空间；" +
+                        "清理它之后已下载的书仍可离线阅读，只是不能再从本机 txt 重新导入。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -496,6 +528,13 @@ fun SettingsContent(
                 ) {
                     OutlinedButton(onClick = actions.onClearImageCache) { Text("清理图片缓存") }
                     OutlinedButton(onClick = actions.onClearOfflineBooks) { Text("清理离线章节") }
+                }
+                OutlinedButton(
+                    onClick = actions.onClearPacks,
+                    enabled = state.packCount > 0,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Text("清理整本下载")
                 }
             }
 
@@ -510,6 +549,13 @@ fun SettingsContent(
                         "离线缓存仅供个人在已授权范围内阅读使用，请勿再分发。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "「下载全本」用的是站点下载页自己给出的地址（dl.wenku8.com），" +
+                        "不是自造的接口；打包文件同样只供个人阅读，请勿再分发或上传。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
 
                 Text(

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -33,11 +34,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,7 +53,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
+import com.xempastissimo.lightnovelreader.data.repo.DownloadedBook
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
+import com.xempastissimo.lightnovelreader.data.repo.formatBytes
+import com.xempastissimo.lightnovelreader.data.repo.formatDownloadDate
 import com.xempastissimo.lightnovelreader.data.source.BookSource
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.BookDetail
@@ -65,6 +72,7 @@ import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
 import com.xempastissimo.lightnovelreader.ui.component.pressHighlight
 import com.xempastissimo.lightnovelreader.ui.theme.LightNovelReaderTheme
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,9 +90,22 @@ data class BookDetailUiState(
     val downloading: Boolean = false,
     val downloadedChapters: Int = 0,
     val totalChapters: Int = 0,
+    /**
+     * Whether the source publishes whole-book packs. The download is offered only when it
+     * does: a source without packs must not grow a button that can only fail.
+     */
+    val packSupported: Boolean = false,
+    /** The whole-book pack already on this device, if any. */
+    val pack: DownloadedBook? = null,
+    val packDownloading: Boolean = false,
+    /** What the pack download is doing right now: 正在下载整本… / 正在导入 12/270 章… */
+    val packPhase: String? = null,
     val message: String? = null,
 ) {
     val chapterCount: Int get() = detail?.chapters?.size ?: 0
+
+    /** True when the pack on this device leaves part of the catalogue to be read online. */
+    val packIncomplete: Boolean get() = pack != null && pack.covered < pack.tocTotal
 }
 
 /** Which of the detail screen's mutually exclusive bodies is on show. */
@@ -102,9 +123,23 @@ class BookDetailViewModel(
     val state: StateFlow<BookDetailUiState> = _state.asStateFlow()
 
     private var downloadJob: Job? = null
+    private var packJob: Job? = null
 
     init {
         load()
+        _state.update {
+            it.copy(
+                packSupported = repository.supportsPackDownload,
+                pack = repository.downloadedBook(bookId),
+            )
+        }
+        // The pack directory is read from disk rather than trusted to be in memory: this
+        // screen can be the first thing opened after a cold start, and another screen may
+        // have downloaded (or deleted) a pack while this one sat on the back stack.
+        viewModelScope.launch {
+            runCatching { repository.refreshPacks() }
+            _state.update { it.copy(pack = repository.downloadedBook(bookId)) }
+        }
         viewModelScope.launch {
             shelfRepository.entries.collect { entries ->
                 val entry = entries.firstOrNull { it.book.bookId == bookId }
@@ -251,6 +286,84 @@ class BookDetailViewModel(
         _state.update { it.copy(downloading = false, message = "已取消缓存") }
     }
 
+    // ------------------------------------------------------------------ pack download
+
+    /**
+     * Downloads the source's own whole-book pack and imports it.
+     *
+     * One request for the entire book, which is why this exists next to 缓存全本 (a page
+     * load per chapter). The catalogue is required and passed along: it is what the pack's
+     * headings are matched against, and it is stored with the pack so the book can later
+     * be opened with no network at all.
+     */
+    fun downloadPack() {
+        val detail = _state.value.detail ?: return
+        if (packJob?.isActive == true) return
+        _state.update { it.copy(packDownloading = true, packPhase = "正在下载整本…") }
+        packJob = viewModelScope.launch {
+            runCatching {
+                repository.downloadPack(bookId, detail) { phase ->
+                    _state.update { it.copy(packPhase = phase) }
+                }
+            }.onSuccess { record ->
+                shelfRepository.add(detail.book)
+                shelfRepository.setCachedChapters(bookId, repository.cachedChapterIds(bookId))
+                _state.update {
+                    it.copy(
+                        packDownloading = false,
+                        packPhase = null,
+                        pack = record,
+                        cachedChapterIds = repository.cachedChapterIds(bookId),
+                        message = "已下载整本 · 覆盖 ${record.covered}/${record.tocTotal} 章" +
+                            " · ${formatBytes(record.bytes)}" +
+                            if (record.covered < record.tocTotal) {
+                                "（${record.tocTotal - record.covered} 章不在打包文件里，可在线阅读）"
+                            } else {
+                                ""
+                            },
+                    )
+                }
+            }.onFailure { error ->
+                // A cancelled job is reported by [cancelPackDownload]; saying it failed
+                // here as well would put a second, contradictory message on the screen.
+                if (error is CancellationException) return@onFailure
+                _state.update {
+                    it.copy(
+                        packDownloading = false,
+                        packPhase = null,
+                        message = "整本下载失败：${error.toUserMessage()}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelPackDownload() {
+        packJob?.cancel()
+        _state.update { it.copy(packDownloading = false, packPhase = null, message = "已取消整本下载") }
+    }
+
+    /**
+     * Deletes everything this app holds for the book: the pack and the chapters.
+     *
+     * Deliberately the same reach as removing the row on the 已下载 tab — one action, one
+     * meaning — while the site's bookshelf and the reading progress stay untouched, since
+     * neither is a copy of the text.
+     */
+    fun deletePack() {
+        viewModelScope.launch {
+            repository.deleteLocalCopy(bookId)
+            shelfRepository.setCachedChapters(bookId, emptySet())
+            _state.update {
+                it.copy(
+                    pack = null,
+                    cachedChapterIds = repository.cachedChapterIds(bookId),
+                    message = "已删除本机下载的整本与章节",
+                )
+            }
+        }
+    }
+
     fun consumeMessage() = _state.update { it.copy(message = null) }
 
     companion object {
@@ -275,6 +388,7 @@ fun BookDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var confirmDeletePack by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -362,6 +476,9 @@ fun BookDetailScreen(
                                         },
                                         onDownload = viewModel::downloadAll,
                                         onCancelDownload = viewModel::cancelDownload,
+                                        onDownloadPack = viewModel::downloadPack,
+                                        onCancelPackDownload = viewModel::cancelPackDownload,
+                                        onDeletePack = { confirmDeletePack = true },
                                     )
                                 }
                                 if (detail.tags.isNotEmpty()) {
@@ -418,6 +535,31 @@ fun BookDetailScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(16.dp),
+        )
+    }
+
+    // Deleting a download is deleting text the user waited for, so it asks first — and
+    // says what it does *not* touch, which is the part that is easy to fear.
+    if (confirmDeletePack) {
+        AlertDialog(
+            onDismissRequest = { confirmDeletePack = false },
+            title = { Text("删除本机下载？") },
+            text = {
+                Text("会删除打包下载的 txt 与导入的章节，站点在线书架与阅读进度都不受影响。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeletePack = false
+                        viewModel.deletePack()
+                    },
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeletePack = false }) { Text("取消") }
+            },
         )
     }
 }
@@ -486,6 +628,9 @@ private fun DetailActions(
     onRead: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    onDownloadPack: () -> Unit,
+    onCancelPackDownload: () -> Unit,
+    onDeletePack: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -532,6 +677,103 @@ private fun DetailActions(
                 color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(top = 8.dp),
             )
+        }
+
+        if (state.packSupported) {
+            PackDownloadAction(
+                state = state,
+                chapterCount = chapterCount,
+                onDownload = onDownloadPack,
+                onCancel = onCancelPackDownload,
+                onDelete = onDeletePack,
+            )
+        }
+    }
+}
+
+/**
+ * The whole-book (站点打包) download, and what this device already holds.
+ *
+ * Kept separate from the 缓存全本 pair above because the two are genuinely different
+ * offers: 缓存全本 fetches a page per chapter, while the pack is one request for the entire
+ * book — and the pack comes with no illustrations, which the hint says out loud so it is
+ * not read as a defect of this app.
+ */
+@Composable
+private fun PackDownloadAction(
+    state: BookDetailUiState,
+    chapterCount: Int,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = 12.dp)) {
+        val pack = state.pack
+        when {
+            state.packDownloading -> {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消下载")
+                }
+                Text(
+                    text = state.packPhase ?: "正在下载整本…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                // Indeterminate on purpose: the download host answers with a chunked
+                // response and no Content-Length, so any percentage would be invented.
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .padding(top = 4.dp),
+                )
+            }
+
+            pack != null -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = onDownload, modifier = Modifier.weight(1f)) {
+                        Text("重新下载", maxLines = 1)
+                    }
+                    OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
+                        Text("删除本地下载", maxLines = 1)
+                    }
+                }
+                Text(
+                    text = buildString {
+                        append("已下载整本 · 覆盖 ${pack.covered}/${pack.tocTotal} 章")
+                        append(" · ${formatBytes(pack.bytes)}")
+                        val date = formatDownloadDate(pack.downloadedAt)
+                        if (date.isNotEmpty()) append(" · $date")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                if (state.packIncomplete) {
+                    Text(
+                        text = "${pack.tocTotal - pack.covered} 章不在打包文件里（站点快照较旧），这些章节可在线阅读",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            else -> {
+                OutlinedButton(
+                    onClick = onDownload,
+                    enabled = chapterCount > 0,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("下载全本（站点打包）", maxLines = 1)
+                }
+                Text(
+                    text = "站点把整本打包成一个 txt，一次请求就能下完，比逐章缓存快得多；打包文件不含插图。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
         }
     }
 }
@@ -702,6 +944,9 @@ private fun DetailActionsPreview() {
             onRead = {},
             onDownload = {},
             onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
         )
     }
 }
@@ -716,6 +961,96 @@ private fun DetailActionsDownloadingPreview() {
             onRead = {},
             onDownload = {},
             onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
         )
     }
 }
+
+@Preview(name = "整本下载 · 可下载", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailActionsPackAvailablePreview() {
+    LightNovelReaderTheme {
+        DetailActions(
+            state = BookDetailUiState(packSupported = true),
+            chapterCount = 270,
+            onRead = {},
+            onDownload = {},
+            onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
+        )
+    }
+}
+
+@Preview(name = "整本下载 · 下载中", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailActionsPackDownloadingPreview() {
+    LightNovelReaderTheme {
+        DetailActions(
+            state = BookDetailUiState(
+                packSupported = true,
+                packDownloading = true,
+                packPhase = "正在导入 120/270 章…",
+            ),
+            chapterCount = 270,
+            onRead = {},
+            onDownload = {},
+            onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
+        )
+    }
+}
+
+@Preview(name = "整本下载 · 已完成", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailActionsPackDonePreview() {
+    LightNovelReaderTheme {
+        DetailActions(
+            state = BookDetailUiState(packSupported = true, pack = samplePack(covered = 270, tocTotal = 270)),
+            chapterCount = 270,
+            onRead = {},
+            onDownload = {},
+            onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
+        )
+    }
+}
+
+@Preview(name = "整本下载 · 覆盖不全", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailActionsPackPartialPreview() {
+    LightNovelReaderTheme {
+        DetailActions(
+            state = BookDetailUiState(packSupported = true, pack = samplePack(covered = 262, tocTotal = 270)),
+            chapterCount = 270,
+            onRead = {},
+            onDownload = {},
+            onCancelDownload = {},
+            onDownloadPack = {},
+            onCancelPackDownload = {},
+            onDeletePack = {},
+        )
+    }
+}
+
+/** A pack record for previews: one book, two volumes, no real download behind it. */
+private fun samplePack(covered: Int, tocTotal: Int): DownloadedBook = DownloadedBook(
+    bookId = 12345,
+    book = sampleDetail.book,
+    intro = sampleDetail.intro,
+    charsetName = "UTF-8",
+    sourceUrl = "https://dl.wenku8.com/down.php?type=utf8&node=1&id=12345",
+    bytes = 6_778_311,
+    downloadedAt = 1_789_225_000_000,
+    tocTotal = tocTotal,
+    covered = covered,
+    slices = emptyMap(),
+    volumes = sampleDetail.volumes,
+)

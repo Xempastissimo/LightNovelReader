@@ -18,6 +18,17 @@ object Wenku8Urls {
     const val IMAGE_HOST = "http://img.wenku8.com"
     const val BASE = SCHEME + HOST
 
+    /**
+     * Host serving the whole-book pack downloads.
+     *
+     * Deliberately not [HOST]: the links the site's own 下载页
+     * (`/modules/article/packshow.php?id={aid}&type=txtfull`) offers point here, and this
+     * host answers an ordinary HTTP client — no Cloudflare challenge, no session, no
+     * referer — unlike every page under [HOST], which is challenged and redirected to the
+     * login form.
+     */
+    const val DOWNLOAD_HOST = "https://dl.wenku8.com"
+
     /** Last-resort category when a book's category segment is unknown. */
     private const val DEFAULT_CATEGORY = "1"
 
@@ -142,6 +153,35 @@ object Wenku8Urls {
 
     fun addToBookcase(bookId: Int): String =
         "$BASE/modules/article/addbookcase.php?bid=$bookId"
+
+    // ------------------------------------------------------------ pack download
+
+    /**
+     * The three encodings the site's download page offers, named exactly as its own
+     * links name them: `txt` is simplified Chinese in **GBK**, `utf8` is simplified
+     * Chinese in UTF-8, `big5` is traditional Chinese.
+     */
+    const val PACK_GBK = "txt"
+    const val PACK_UTF8 = "utf8"
+    const val PACK_BIG5 = "big5"
+
+    /** The two mirrors the download page lists; it tells the user to try 载点二 if 载点一 fails. */
+    const val PACK_NODE_PRIMARY = 1
+    const val PACK_NODE_MIRROR = 2
+
+    /**
+     * Whole-book pack download.
+     *
+     * Verified against the live site: the anchors on `packshow.php` are exactly this URL
+     * with `type` and `node` varied, so it can be built without reading that page (which
+     * requires a login and is challenged for non-browser clients). [bookId] is the same
+     * book id as everywhere else here (`/book/{aid}.htm`) — not the bookshelf's own id.
+     */
+    fun packDownload(
+        bookId: Int,
+        type: String = PACK_UTF8,
+        node: Int = PACK_NODE_PRIMARY,
+    ): String = "$DOWNLOAD_HOST/down.php?type=$type&node=$node&id=$bookId"
 
     /** Resolves a page-relative link the way a browser would; null when there is none. */
     fun absoluteUrl(href: String?): String? {

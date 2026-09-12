@@ -35,6 +35,44 @@ data class OnlineShelf(
 )
 
 /**
+ * A byte range of a chapter's body inside a whole-book pack.
+ *
+ * Offsets are into [PackedBook.bytes] — the exact bytes written to disk — so the range
+ * still addresses the same text after a restart, without decoding the whole pack again.
+ */
+data class PackSlice(val offset: Int, val length: Int)
+
+/**
+ * A whole-book text pack as the source publishes it, already matched against a catalogue.
+ *
+ * The bytes are kept verbatim (and recorded with [charsetName]) because the pack is an
+ * artefact in its own right: it is what the source offered for download, and reading a
+ * chapter back out of it must not depend on a re-download.
+ */
+class PackedBook(
+    val bytes: ByteArray,
+    /** Charset the pack was published in; the app decodes slices with it. */
+    val charsetName: String,
+    /** The URL this pack came from, kept for the record and for re-download messages. */
+    val sourceUrl: String,
+    /** Chapter id -> its body's byte range inside [bytes]; chapters the pack does not hold are absent. */
+    val slices: Map<Int, PackSlice>,
+    /** How many of the catalogue's chapters the pack covers. */
+    val coveredChapters: Int,
+    /** Headings the pack carries that no catalogue chapter claims (the pack lags or leads the site). */
+    val unmatchedHeadings: Int,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is PackedBook &&
+            charsetName == other.charsetName &&
+            sourceUrl == other.sourceUrl &&
+            bytes.contentEquals(other.bytes))
+
+    override fun hashCode(): Int =
+        (bytes.contentHashCode() * 31 + charsetName.hashCode()) * 31 + sourceUrl.hashCode()
+}
+
+/**
  * A book source: one website, reduced to the six operations the app needs.
  *
  * Adding a second source later means implementing this interface and registering
@@ -112,4 +150,32 @@ interface BookSource {
 
     /** Used by the cover/illustration loader for the source's image CDN. */
     fun imageReferer(): String
+
+    /**
+     * Whether the source publishes whole-book text packs.
+     *
+     * The screens ask before offering the download, because a source without packs must
+     * not grow a button that can only fail. A source that has packs overrides both this
+     * and [downloadPack].
+     */
+    val supportsPackDownload: Boolean get() = false
+
+    /**
+     * Downloads a book's whole-book text pack and matches it against [detail].
+     *
+     * The catalogue is passed in rather than fetched here: the caller has just loaded it
+     * (the download is offered from the book's own page), and a second read of the same
+     * catalogue would be one more page load against a site that throttles.
+     *
+     * The pack is a snapshot the source keeps for a while, so it can lag the live
+     * catalogue: [PackedBook.slices] simply covers the chapters it holds. Returning
+     * `null` means this source has no packs at all; a source that has them throws
+     * [com.xempastissimo.lightnovelreader.data.network.HttpFailure] when this particular
+     * book has none.
+     */
+    suspend fun downloadPack(bookId: Int, detail: BookDetail): PackedBook? =
+        throw com.xempastissimo.lightnovelreader.data.network.HttpFailure.Status(
+            501,
+            "$displayName 未提供整本下载",
+        )
 }

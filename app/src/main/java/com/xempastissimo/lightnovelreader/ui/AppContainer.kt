@@ -12,6 +12,7 @@ import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
 import com.xempastissimo.lightnovelreader.data.repo.ChapterCache
 import com.xempastissimo.lightnovelreader.data.repo.ImageLoader
+import com.xempastissimo.lightnovelreader.data.repo.PackStore
 import com.xempastissimo.lightnovelreader.data.repo.SettingsRepository
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
 import com.xempastissimo.lightnovelreader.data.source.BookSource
@@ -78,7 +79,16 @@ class AppContainer(private val context: Context) {
 
     val chapterCache: ChapterCache by lazy { ChapterCache(context) }
 
-    val bookRepository: BookRepository by lazy { BookRepository(bookSource, chapterCache) }
+    /**
+     * The site's own whole-book packs, kept as downloaded.
+     *
+     * Separate from [chapterCache] on purpose: a pack is the artefact the source offered
+     * (and can be re-read without another download), while the chapter cache is what the
+     * reader consumes.
+     */
+    val packStore: PackStore by lazy { PackStore(context) }
+
+    val bookRepository: BookRepository by lazy { BookRepository(bookSource, chapterCache, packStore) }
 
     val shelfRepository: ShelfRepository by lazy { ShelfRepository(context) }
 
@@ -95,7 +105,10 @@ class AppContainer(private val context: Context) {
 
     /** Reads the local library from disk; safe to call once per process. */
     fun warmUp() {
-        appScope.launch { shelfRepository.load() }
+        appScope.launch {
+            shelfRepository.load()
+            packStore.load()
+        }
     }
 }
 

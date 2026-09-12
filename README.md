@@ -2,11 +2,11 @@
 
 一个源于Wenku8轻小说网站的 Android 端轻小说阅读器。
 
-**整体框架**：书源可插拔、UI 已成型、可跑通「登录 → 找书 → 看目录 → 阅读 → 记进度 → 离线缓存」的完整链路。
+**整体框架**：UI 已成型、可跑通「登录 → 找书 → 看目录 → 阅读 → 记进度 → 离线缓存」的完整链路。
 
-书源是[轻小说文库](https://www.wenku8.net/)，实现细节集中在一个抽换点，接第二个源不需要改任何界面代码。
+当前只接入[轻小说文库](https://www.wenku8.net/)书源。
 
-**当前版本**：`v0.1.1-alpha`（第二个预发布版）。GitHub Release 用标签 `v0.1.1-alpha` 发布，并勾选 **Pre-release**；应用内 `versionName = "0.1.1-alpha"`、`versionCode = 2`。
+**当前版本**：`v0.1.2-alpha`（第三个预发布版）。GitHub Release 用标签 `v0.1.2-alpha` 发布，并勾选 **Pre-release**；应用内 `versionName = "0.1.2-alpha"`、`versionCode = 3`。
 
 相对 `v0.1-alpha` 的变化：
 
@@ -46,11 +46,11 @@
 - [x] 阅读背景调整
 - [x] 网站源与设备书架同步
 - [x] 历史同步（当前仅支持具体到xx卷）
+- [x] 轻小说txt下载（站点整本打包，见 §8.2）
 - [ ] 轻小说排行榜下拉加载
 - [ ] 本地书签bookmark
-- [ ] 轻小说txt下载
 - [ ] 简繁切换
-- [ ] 翻页模式
+- [ ] 翻页模式（当前内置翻页存在bug）
 - [ ] 自动更新
 - [ ] ……
 
@@ -62,14 +62,14 @@
 
 ## 3. 功能说明
 
-- 书源可插拔，当前接入轻小说文库（wenku8），新增书源只需实现 `BookSource` 接口
+- 当前只接入轻小说文库（wenku8）书源
 - 登录方式：原生表单 / 浏览器登录（人机校验）/ 手动粘贴 Cookie
 - 发现页：榜单与最近更新
 - 搜索：标题/作者搜索 + 搜索历史
-- 书籍详情：封面、元信息、卷章目录、缓存全本
-- 书架：继续阅读（本地阅读记录）/ 在线书架 / 已缓存（本机已下载章节）；同步结果与补全提示显示在页面底部
+- 书籍详情：封面、元信息、卷章目录、缓存全本、**下载全本（站点打包 txt）**
+- 书架：继续阅读（本地阅读记录）/ 在线书架 / **已缓存**（本机已下载章节）/ **已下载**（站点打包的整本）；同步结果与补全提示显示在页面底部
 - 阅读器：翻页阅读 + 目录跳转 + 阅读设置面板 + 章节切换横幅提示 + 音量键翻页（含反转）；进入阅读时隐藏系统状态栏，返回时自动恢复
-- 设置：账号管理、阅读外观（顶底栏配色、音量键翻页）、深色模式、存储管理、书源说明、开发者页（跳转项目 GitHub 主页）
+- 设置：账号管理、阅读外观（顶底栏配色、音量键翻页）、深色模式、存储管理（离线章节 / 整本下载 / 图片缓存）、书源说明、开发者页（跳转项目 GitHub 主页）
 - 所有页面的刷新按钮限速 2 秒/次：窗口内的重复点击被静默忽略，不弹「刷新过快」提示
 
 ## 4. 快速开始
@@ -77,7 +77,7 @@
 ```bash
 .\gradlew.bat assembleDebug          # 构建 debug APK
 .\gradlew.bat installDebug           # 安装到已连接设备/模拟器
-.\gradlew.bat test                   # JVM 单元测试（144 个）
+.\gradlew.bat test                   # JVM 单元测试（192 个）
 .\gradlew.bat connectedAndroidTest   # 设备测试（8 个）
 ```
 
@@ -112,14 +112,16 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 │  ├─ network/CookieStore.kt       持久化 cookie jar（JSON + 锁）
 │  ├─ network/RateLimiter.kt       串行限流 + 指数退避
 │  ├─ network/RefreshThrottle.kt   刷新按钮的 2 秒/次限速（静默丢弃窗口内的重复点击）
-│  ├─ source/BookSource.kt         书源接口（榜单/目录/详情/正文/在线书架；`bookSummary` 只取详情页元信息）
+│  ├─ source/BookSource.kt         书源接口（榜单/目录/详情/正文/在线书架/整本打包；`bookSummary` 只取详情页元信息）
 │  ├─ source/wenku8/               首个书源的全部实现
-│  │  ├─ Wenku8Urls.kt             URL 模板 / 解析工具
+│  │  ├─ Wenku8Urls.kt             URL 模板 / 解析工具（含下载站 `dl.wenku8.com`）
 │  │  ├─ Wenku8Selectors.kt        选择器回退链（改版只改这里）
 │  │  ├─ Wenku8Parser.kt           HTML → 领域模型
+│  │  ├─ Wenku8PackParser.kt       整本打包 txt → 章节字节切片（纯函数，见 §8.2）
 │  │  └─ Wenku8Source.kt           BookSource 实现
 │  └─ repo/                        对界面暴露的仓库层
-│     ├─ BookRepository.kt         详情缓存 + 章节离线读写 + 全本下载
+│     ├─ BookRepository.kt         详情缓存 + 章节离线读写 + 逐章缓存 + 整本下载编排
+│     ├─ PackStore.kt              整本打包文件与索引（`filesDir/packs/`，见 §8.2）
 │     ├─ ShelfRepository.kt        本地书架 / 阅读进度 / 搜索历史 / 元信息合并
 │     ├─ SettingsRepository.kt     DataStore 偏好设置
 │     └─ ImageLoader.kt            自研图片加载（内存 LRU + 磁盘 + Referer）
@@ -135,8 +137,8 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
    └─ screen/
       ├─ discover/                 榜单与最近更新
       ├─ search/                   标题/作者搜索 + 历史
-      ├─ detail/                   封面、元信息、卷章目录、缓存全本
-      ├─ shelf/                    继续阅读（本地阅读记录）/ 书架（**只显示站点账号里的收藏**）/ 已缓存（本机已下载的章节）
+      ├─ detail/                   封面、元信息、卷章目录、缓存全本、整本打包下载
+      ├─ shelf/                    继续阅读（本地阅读记录）/ 书架（**只显示站点账号里的收藏**）/ 已缓存（本机已缓存的章节）/ 已下载（站点打包的整本）；`ShelfContent.kt` 是无状态渲染半，`ShelfFilters.kt` 决定每个页签的行从哪来，`ShelfScreenPreviews.kt` 放整屏 `@Preview`（多状态下拉）
       ├─ settings/                 账号、阅读外观（含顶底栏配色、音量键翻页与反转）、深色模式、存储、书源说明、开发者页；`SettingsScreenPreviews.kt` 放整屏 `@Preview`（多状态下拉）
       ├─ login/                    原生表单 + 浏览器登录（人机校验）+ 粘贴 Cookie
       └─ reader/                   翻页阅读器 + 目录 + 阅读设置面板 + 章节切换横幅提示
@@ -150,7 +152,8 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) ──> HttpFetcher
                                      │                                     │
                                      ├─ ChapterCache（离线章节）            ├─ CookieStore
-                                     ├─ ShelfRepository（书架/进度）        └─ RateLimiter
+                                     ├─ PackStore（整本打包 txt + 索引）    └─ RateLimiter
+                                     ├─ ShelfRepository（书架/进度）
                                      └─ ImageLoader（封面/插图）
 ```
 
@@ -181,6 +184,11 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 | 加入书架 | `/modules/article/addbookcase.php?bid={aid}` —— 这里的 `bid` **就是书籍 id**，与移出时的同名字段含义不同；先取页面自身的 `a[href*=addbookcase]`，取不到才退回该地址 |
 | 登录 | `/login.php?do=submit&jumpurl=...` |
 | 书架上限 | 页头写着「您的书架可收藏 300 本」，由站点强制；`Wenku8Source.MAX_BOOKCASE_BOOKS` 只是页头读不到时的兜底 |
+| 整本下载页 | `/modules/article/packshow.php?id={aid}&type=txtfull` —— **需要登录**，且对非浏览器客户端返回 403 质询。app **不读它**：页面上只有一条备注（「如遇载点一无法下载，请尝试使用载点二」）和下面这些链接，没有独有信息 |
+| **整本打包下载** | 另一个主机：`https://dl.wenku8.com/down.php?type={txt,utf8,big5}&node={1,2}&id={aid}`。`type=txt`＝简体 GBK，`utf8`＝简体 UTF-8，`big5`＝繁体；`node` 是页面上的载点一/载点二。**只有 `id` 是书籍 id**，与书架 id 无关 |
+| 打包文件形态 | 纯文本，单文件整本：第 1 行站点横幅，第 2 行 `<书名>`，之后**章节标题顶格**、正文行 4 个半角空格缩进、空行分段；插图为单独一章但**正文为空**（不含图片，与站点自己的 txt 一致） |
+
+> `dl.wenku8.com` 与 `www.wenku8.net` 的行为完全不同，这一点在真站核实过：它对普通 HTTP 客户端（`HttpURLConnection`，**不带任何 Cookie、不带 Referer**）返回 `200 application/octet-stream` 与完整文件（2231 的 UTF-8 包 6,778,311 字节 / GBK 包 4,678,363 字节），没有任何 Cloudflare 质询；不存在的书返回 `404`。响应是 `Transfer-Encoding: chunked` 且**没有 `Content-Length`**，所以下载进度只能是不确定进度条。
 
 ### 7.2 选择器
 
@@ -270,11 +278,36 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 - **本地会话文件的敏感性**：从 WebView 导入的 `jieqiUserInfo` 按站点设计**包含一个口令哈希**（`jieqiUserPassword=…`），会随其他 Cookie 一起写入应用私有的 `files/session/cookies.json`。它不会离开设备，但请在共享设备上用完「设置 → 账号 → 退出登录」清理。
 - 图片走 `http://img.wenku8.com`（源站只提供 HTTP），因此 `network_security_config.xml` 只对该域名放开明文流量，其余仍强制 HTTPS。
 
+### 8.2 整本打包下载（「已下载」页签）
+
+书籍详情页的「下载全本（站点打包）」**一次请求**取回整本书，这与「缓存全本」是两件事：后者按章抓取，一次一页。
+
+**地址从站点自己的下载页读出，但不读那个页面**。`packshow.php` 需要登录、对非浏览器客户端返回质询，而且页面上只有「如遇载点一无法下载，请尝试使用载点二」这条备注和几个链接——链接本身可以构造（见 §7.1）。app 因此直接用 `dl.wenku8.com`，依次尝试 **UTF-8 载点一 → UTF-8 载点二 → GBK 载点一 → GBK 载点二**；这也是这条链路唯一走**原生 HTTP 通道**的地方（该主机没有质询），其余页面仍走浏览器内核。
+
+**下载后做两件事**（两份都留着，用户可在设置页分别清理）：
+
+```
+filesDir/packs/{bookId}/
+├── text.txt       下载到的原文，逐字节保存（UTF-8 或 GBK）
+└── index.json     书名/作者/封面/简介 + 当时的目录 + 每章的字节区间
+
+filesDir/library/{bookId}/{chapterId}.json    ← 同一批章节也导入到逐章缓存
+```
+
+- **章节标题 = 目录里的「卷名 + 空格 + 章节名」**：真站核实 2231 的目录 270 章**全部对上**（`Wenku8PackParser.match`）。
+- **标点必须归一化**：同一个分隔符，页面写 `•`（U+2022），打包文件写 `·`（U+00B7）。逐字比对会丢掉约 3% 的章节（该书 270 章里丢 8 章），归一化后 270/270。
+- **插图章节在包里是空的**：它是标题行加几个空行，没有图片。这种章节**不记录切片**，于是阅读时回落到在线章节（在线那章有插图）。2231 因此报告 **覆盖 254/270 章**，缺的 16 章正好是全部 `插图` 章。
+- **读取优先级**：逐章缓存 → 打包切片 → 网络。缓存优先是因为在线缓存可能带插图；打包其次是为了让「清理离线章节」之后已下载的书**仍然可读**。
+- **离线目录**：`index.json` 里存了当时的目录，所以已下载的书在完全离线时**也能打开**（打开时不用再取一次目录）。这条只对已下载的书成立，其余书仍受 §10「离线打开仍要取一次目录」限制。
+- **两个本地页签是分区的**：有打包记录的书**只**出现在「已下载」，不再出现在「已缓存」（否则同一本书会带着两套说法出现两次）。
+
+失败形态都是显式的：`404` → 「站点没有提供这本书的打包下载」；`403`/质询 → 现有文案引导先做浏览器校验；下载中取消或进程被杀 → 只留下没有 `index.json` 的目录，下次启动会被忽略，设置页「清理整本下载」可回收。
+
 ---
 
 ## 9. 测试
 
-### JVM 单元测试（`app/src/test`，144 个）
+### JVM 单元测试（`app/src/test`，192 个）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -285,13 +318,17 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | `data/network/RateLimiterTest` | 限流间隔、退避序列、重试判定（假时钟） |
 | `data/network/RefreshThrottleTest` | 刷新按钮的限速窗口：首次必过、窗口内丢弃、窗口过后放行、连点保持 2 秒下限而不被推迟（假时钟） |
 | `data/source/wenku8/Wenku8ParserTest` | 详情元信息、卷章目录、正文分块、插图与导航、登录墙识别、榜单/搜索条目（含封面取哪张）、书架、最近更新解析、封面推导、URL 工具 |
+| `data/source/wenku8/Wenku8PackParserTest` | 打包文本的行扫描与字节切片、UTF-8/GBK、CRLF 与全角缩进、`•`/`·` 归一化、重名章节按序消耗、插图章节「有标题无正文」、目录里有而包里没有 / 包里有而目录没有、切片不重叠 |
 | `data/source/wenku8/Wenku8SourceEndToEndTest` | 假 HTTP 层下的完整取数：书架总数与批量移除表单、详情→目录→正文、`bookSummary` 只读详情页而不读目录 |
 | `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载；同步**保留**站点页面没带的封面/文库/日期，`updateBook` 只补元信息、不动进度与缓存 |
 | `data/repo/ChapterCacheOfflineBooksTest` | 「已缓存」的书单来自磁盘：章节数与占用、`.json.tmp` 与空文件不算数、非书籍 id 目录忽略 |
+| `data/repo/PackStoreTest` | `text.txt` + `index.json` 往返、按字节区间读回章节、截断的包不产生半章、GBK 按记录的解码、删除/清空、损坏或无索引的目录被忽略、按下载时间排序 |
+| `data/repo/BookRepositoryPackTest` | 下载→导入→记录；读取优先级（缓存 → 打包 → 网络）与「清理离线章节后仍可读」；`cachedChapterIds` 合并打包切片；删包/删本机副本后的回落；离线目录兜底；不支持整本下载的书源 |
+| `ui/screen/shelf/ShelfFiltersTest` | 四个页签的行来源与排序；有打包记录的书不出现在「已缓存」；没有书架行的下载书用记录里的元信息成行并保留进度 |
 | `ui/screen/reader/ChapterTurnTest` | 越界滑动是否翻章、翻章方向的判定、章节切换分类逻辑 |
 | `ui/screen/reader/VolumeKeyPageStepTest` | 音量键翻页的默认方向与「反转音量翻页」的互换、其他按键不参与 |
 
-解析类测试使用**结构等价、文案中性**的 HTML 片段（与真实页面的标签/类名/嵌套一致），不保存站点正文。
+解析类测试使用**结构等价、文案中性**的片段（与真实页面的标签/类名/嵌套一致），不保存站点正文。
 
 ### Compose 预览（`@Preview`，不是测试但同样不跑设备）
 
@@ -337,8 +374,13 @@ settings/
 | **刷新按钮限速 2 秒/次** | `RefreshThrottle`（`data/network`）在窗口内静默丢弃重复点击，不做任何显性提示：点太快时请求本就已经在路上，多一条「刷新过快」只是噪音。它是**用户手势**的节奏控制，不是 `RateLimiter` 的替代——后者管的是每一个请求，前者只管按钮。自动触发的读取（首次进入、会话变化后的重取、错误页重试）不走限速，否则一次点击会挡住真正需要的那次读取。 |
 | **阅读时隐藏状态栏** | 只隐藏状态栏（`statusBars()`），不隐藏导航栏：连导航栏一起隐藏会进入全沉浸模式，第一次滑动只用于把栏叫回来，键盘也要临时恢复系统栏。退出阅读时有状态在恢复，因此系统返回手势与页面返回按钮都一样。 |
 | **无 WorkManager 后台下载** | 缓存全本在进程内串行执行，退到后台可能被系统暂停；后续可迁到前台服务/WorkManager（需新增依赖）。 |
-| **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
-| **「已缓存」按磁盘目录统计** | 书单来自 `ChapterCache.offlineBooks()`（`library/{bookId}/*.json`），而不是书架行里的 `cachedChapterIds` 记录 —— 后者只在「缓存全本」完成时写入，在线阅读缓存的章节不会记进去。两者不一致时以磁盘为准。 |
+| **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。**例外：整本下载过的书**会把当时的目录存进 `packs/{bookId}/index.json`，`detail()` 取不到站点时回退到它，因此可以完全离线打开（见 §8.2）。其余书后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
+| **「已缓存」按磁盘目录统计** | 书单来自 `ChapterCache.offlineBooks()`（`library/{bookId}/*.json`），而不是书架行里的 `cachedChapterIds` 记录 —— 后者只在「缓存全本」完成时写入，在线阅读缓存的章节不会记进去。两者不一致时以磁盘为准。**有整本打包记录的书不出现在这一栏**，它属于「已下载」（见 §8.2）。 |
+| **打包文件不含插图** | 站点自己的 txt 里，`插图` 章只有标题、正文为空。导入时这类章节**不记录切片**，阅读时回落到在线章节（在线那章有插图）；因此「覆盖 N/M 章」里的 N 天然少于 M（例：2231 是 254/270，差的 16 章正好是全部插图章）。 |
+| **打包快照与目录会漂移** | 站点对打包文件做缓存（页面自己写着「下载数据缓存可能延迟2小时刷新」），所以包里可能有目录里没有的章节、目录里也可能有包里还没有的章节。前者被忽略（只计入日志里的 `unmatchedHeadings`），后者不导入、仍可在在线阅读。 |
+| **已下载占两份空间** | 打包 txt 与导入的章节各占一份（同一本书约 2 倍）。这是有意的：txt 是站点给的原始文件、可离线重读，章节是阅读器实际读的。设置页「存储」分别显示并提供「清理整本下载」（清掉 txt 后已下载的书仍可读）。 |
+| **繁体打包未接入** | 站点还提供 `type=big5`，URL 层与解析层都已按 charset 参数化（`Wenku8PackParser` 按传入 charset 解码），但界面只做简体 UTF-8（失败回退 GBK），没有编码/繁体开关。 |
+| **下载只能是不确定进度** | 打包下载的响应是 `Transfer-Encoding: chunked` 且没有 `Content-Length`，所以进度条只能是不确定样式加阶段文案（正在下载整本… / 正在导入 N/M 章…），给不出百分比。 |
 | **无书源插件化** | 目前靠 `BookSource` 接口 + 手写实现；脚本化书源（规则引擎）刻意没做。 |
 | **依赖全为本地缓存** | 本机当时无法访问 Maven Central，因此没有引入 okhttp/jsoup/coil/room；已有实现全部自研或使用框架 API。若网络可达，可按需替换（见下）。 |
 
@@ -361,7 +403,7 @@ settings/
 - `assembleDebug` 通过；APK 安装后**冷启动无异常**（`logcat` 无 `FATAL`）。
 - 底部四个页签（发现/书架/搜索/设置）均可正常进入并渲染：发现页显示榜单标签与状态、书架页显示「继续阅读/书架」、搜索页显示输入与历史、设置页显示账号/阅读外观/外观/存储/书源各分区。
 - 未登录时访问需鉴权的接口，界面显示明确文案与「去登录」入口，而不是空白或崩溃。
-- 设备端 8 个 instrumented 测试、JVM 144 个单元测试全部通过。
+- 设备端 8 个 instrumented 测试、JVM 192 个单元测试全部通过。
 
 ### 本轮改动的真机复核（Android 真机，`adb` + 截图/`uiautomator`）
 
@@ -371,6 +413,31 @@ settings/
 | 书架同步提示移至页面下方 | 点「同步站点在线书架」后，`uiautomator` 读到 snackbar「已同步 2 本」位于 `[131,2284][365,2350]`（屏幕 1260×2800），即页面底部、底部导航栏之上；列表行不再被遮挡。 |
 | 设置页开发者入口 | 设置页最下方可见「开发者」卡片，点按后前台 Activity 变为 `com.vivo.browser/.BrowserActivity`，地址栏为 `https://github.com…`。 |
 | 刷新限速 2 秒/次 | 约 0.93 秒内连发 6 次同步点击，持续轮询界面状态只观测到 **1 个**同步周期（3.3s 开始、5.7s 结束，随后「已同步 2 本」），第 2～6 次点击被静默丢弃且没有任何「刷新过快」提示；与之配套的 `RefreshThrottleTest` 覆盖窗口判定本身。 |
+
+### 整本打包下载的核实（Playwright，真实登录会话 + 真实打包文件）
+
+用 Playwright（`--browser=msedge` 才能过 Cloudflare；headless chromium 会被 403 质询）登录站点后逐项核实：
+
+| 事项 | 结果 |
+|---|---|
+| `packshow.php?id=2231&type=txtfull` | 未登录时 302 到 `login.php`；页面正文只有「如遇载点一无法下载，请尝试使用载点二」与 6 条链接（`type={txt,utf8,big5}` × `node={1,2}`），其中 `id` 与 `/book/2231.htm` 是同一个书籍 id |
+| 链接可构造、且不需要会话 | `GET https://dl.wenku8.com/down.php?type=utf8&node=1&id=2231`（不带 Cookie、不带 Referer）→ `200`，`application/octet-stream`，6,778,311 字节；`type=txt` → 4,678,363 字节（GBK：首字节 `a1 ef a1 ee` 即 `★☆`） |
+| 不存在/无打包的书 | `id=99999999` → `404` |
+| 打包文件形态 | 115,356 行：第 1 行站点横幅、第 2 行 `<书名>`；**顶格行 274 行**、**4 空格缩进行 57,389 行**，无其他缩进 |
+| 解析器对真实数据的表现 | 271 个 section；目录 270 章**全部对上**（`consumed=270`）；**覆盖 254 章**，未覆盖的 16 章全部是各卷 `插图`；唯一未匹配的标题是文件末尾的装饰分隔线 `◆◇◆…`；254 个切片都没有空正文 |
+| GBK 包 | 同样 271 个 section、254 章有正文、57,389 段，**0 个替换字符**（U+FFFD），首段为「台版 转自 轻之国度」，与 UTF-8 包一致 |
+| 标点差异 | 页面写 `罗亚•葛雷基亚`（U+2022），打包文件写 `罗亚·葛雷基亚`（U+00B7）。逐字比对只匹配 262/270，归一化后 270/270 |
+
+> 该核实通过一个**临时**的 JVM 探针测试完成（读取真实打包文件，不在仓库中保存任何正文），确认后即删除；仓库里的 `Wenku8PackParserTest` 使用结构等价、文案中性的自制片段。
+
+### 本轮的真机复核（Android 真机，`adb` + `uiautomator`）
+
+| 改动 | 复核方式与结果 |
+|---|---|
+| 「已下载」空态 | 书架页第 4 个页签存在，空态显示「还没有下载任何整本」+ 说明 + 「去搜索」，与 `ShelfScreenPreviews.kt` 的预览一致 |
+| 底部导航被新空态暴露的一个 bug | 点「去搜索」跳到搜索页后，再点底部「书架」**没有反应或仍停在搜索页**（发现/设置正常）。原因是底部导航用的 `popUpTo(start){saveState=true} + restoreState=true` 模式被一次**普通** `navigate(Routes.SEARCH)` 破坏了：搜索页被压在书架**之上**，下一次点「书架」时两者被当作**一段**一起保存，而 `restoreState` 把整段（含搜索页）又还原回来，于是顶部仍然是搜索页。修法是把**所有**进入页签路由的导航都收敛到同一个 `NavController.navigateToTab`（底部导航点击、书架空态「去搜索」、发现页「去搜索」），非页签路由（详情/阅读器/登录）继续用普通 `navigate` |
+| 修复后的复核 | 书架→已下载→「去搜索」→（顶部为搜索页）→点底部「书架」→ 回到书架且仍停在「已下载」页签；搜索→书架→设置→发现→书架逐个点过均可正常切换，页签状态保留 |
+| 整本下载可用性 | 由你（用户）在真机上点「下载全本（站点打包）」完成验证：`dl.wenku8.com` 在手机出口没有被质询，下载与导入都成功 |
 
 封面路径在真站上复核过（用真实 Chrome 登录后读取首页与榜单 DOM，再用应用自身的 UA/Referer 请求图片）：
 

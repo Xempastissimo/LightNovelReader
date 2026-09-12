@@ -2,6 +2,7 @@ package com.xempastissimo.lightnovelreader.data.source.wenku8
 
 import android.util.Log
 import com.xempastissimo.lightnovelreader.core.html.Html
+import com.xempastissimo.lightnovelreader.core.text.CharsetCodec
 import com.xempastissimo.lightnovelreader.core.text.TextCleaner
 import com.xempastissimo.lightnovelreader.data.network.BrowserBackedFetcher
 import com.xempastissimo.lightnovelreader.data.network.CookieStore
@@ -10,6 +11,7 @@ import com.xempastissimo.lightnovelreader.data.network.HttpFetcher
 import com.xempastissimo.lightnovelreader.data.source.BookSource
 import com.xempastissimo.lightnovelreader.data.source.LoginResult
 import com.xempastissimo.lightnovelreader.data.source.OnlineShelf
+import com.xempastissimo.lightnovelreader.data.source.PackedBook
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.BookDetail
 import com.xempastissimo.lightnovelreader.domain.model.ChapterContent
@@ -18,6 +20,7 @@ import com.xempastissimo.lightnovelreader.domain.model.SearchField
 import com.xempastissimo.lightnovelreader.domain.model.ShelfEntry
 import com.xempastissimo.lightnovelreader.domain.model.UserSession
 import java.net.URLDecoder
+import java.nio.charset.Charset
 
 /**
  * The first book source: 轻小说文库 (wenku8).
@@ -233,6 +236,73 @@ class Wenku8Source(
         return parsed.copy(blocks = Wenku8Parser.normalizeBlocks(parsed.blocks))
     }
 
+    override val supportsPackDownload: Boolean = true
+
+    /**
+     * The site's own whole-book pack download.
+     *
+     * Deliberately built from [Wenku8Urls.packDownload] instead of reading
+     * `packshow.php`: that page needs a login, is challenged for non-browser clients, and
+     * carries nothing the URL does not — the links it shows are this URL with `type` and
+     * `node` varied. The download host is a plain file host, so this is the one part of
+     * the source that goes through the fast native channel instead of the browser engine.
+     *
+     * The mirrors and encodings are tried in the order the site itself suggests (载点一,
+     * then 载点二) for UTF-8 first and GBK second: UTF-8 is what this app reads natively
+     * and is the same text, only larger. Nothing is skipped past silently — if every
+     * candidate fails, the last failure is what the user is told about.
+     */
+    override suspend fun downloadPack(bookId: Int, detail: BookDetail): PackedBook {
+        var lastFailure: Throwable? = null
+        val referer = Wenku8Urls.book(bookId)
+
+        for (candidate in PACK_CANDIDATES) {
+            val url = Wenku8Urls.packDownload(bookId, candidate.type, candidate.node)
+            val bytes = try {
+                http.getBytes(url, referer = referer).bytes
+            } catch (error: Throwable) {
+                // A 404 is a fact about the book, not about the mirror: the pack has not
+                // been generated (or the book is gone), and the other three candidates
+                // would answer exactly the same way.
+                if (error is HttpFailure.Status && error.statusCode == 404) {
+                    throw HttpFailure.Status(404, "站点没有提供这本书的打包下载（打包文件可能尚未生成）")
+                }
+                lastFailure = error
+                Log.w(TAG, "pack download failed: $url -> ${error.message}")
+                continue
+            }
+
+            if (bytes.isEmpty()) {
+                lastFailure = HttpFailure.Status(200, "下载到的打包文件是空的")
+                continue
+            }
+
+            val sections = Wenku8PackParser.scan(bytes, candidate.charset)
+            if (sections.isEmpty()) {
+                lastFailure = HttpFailure.Status(200, "打包文件里没有解析出任何章节")
+                continue
+            }
+
+            val match = Wenku8PackParser.match(detail, sections)
+            Log.i(
+                TAG,
+                "pack for $bookId: url=$url bytes=${bytes.size} charset=${candidate.charset.name()} " +
+                    "sections=${sections.size} covered=${match.coveredChapters} unmatched=${match.unmatchedHeadings}",
+            )
+            return PackedBook(
+                bytes = bytes,
+                charsetName = candidate.charset.name(),
+                sourceUrl = url,
+                slices = match.slices,
+                coveredChapters = match.coveredChapters,
+                unmatchedHeadings = match.unmatchedHeadings,
+            )
+        }
+
+        throw (lastFailure as? HttpFailure)
+            ?: HttpFailure.Network("整本下载失败：${lastFailure?.message ?: "未知错误"}", lastFailure)
+    }
+
     override val onlineShelfCapacity: Int = MAX_BOOKCASE_BOOKS
 
     /**
@@ -392,6 +462,23 @@ class Wenku8Source(
 
         /** The site's own cap on how many books a bookshelf may hold. */
         const val MAX_BOOKCASE_BOOKS = 300
+
+        private val GBK = CharsetCodec.charsetFor(CharsetCodec.DEFAULT_SOURCE_CHARSET) ?: Charsets.UTF_8
+
+        /** One `type`/`node` pair of the download page, and the charset that `type` means. */
+        private class PackCandidate(val type: String, val node: Int, val charset: Charset)
+
+        /**
+         * What to try, in order: the site's own advice is to fall back from 载点一 to
+         * 载点二, and UTF-8 is preferred over GBK because it is the same text in the
+         * encoding this app reads natively.
+         */
+        private val PACK_CANDIDATES = listOf(
+            PackCandidate(Wenku8Urls.PACK_UTF8, Wenku8Urls.PACK_NODE_PRIMARY, Charsets.UTF_8),
+            PackCandidate(Wenku8Urls.PACK_UTF8, Wenku8Urls.PACK_NODE_MIRROR, Charsets.UTF_8),
+            PackCandidate(Wenku8Urls.PACK_GBK, Wenku8Urls.PACK_NODE_PRIMARY, GBK),
+            PackCandidate(Wenku8Urls.PACK_GBK, Wenku8Urls.PACK_NODE_MIRROR, GBK),
+        )
 
         fun create(http: HttpFetcher, cookies: CookieStore): Wenku8Source =
             Wenku8Source(http, cookies)

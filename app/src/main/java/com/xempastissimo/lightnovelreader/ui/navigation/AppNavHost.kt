@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavController
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -74,6 +75,33 @@ private val bottomTabs = listOf(
     BottomTab(Routes.SEARCH, "搜索", Icons.Filled.Search),
     BottomTab(Routes.SETTINGS, "设置", Icons.Filled.Settings),
 )
+
+/**
+ * Moves to one of the four bottom tabs, exactly the way a tap on the bar does.
+ *
+ * **Every** navigation to a tab route has to go through here, including the ones a screen
+ * starts by itself (「去搜索」 on an empty shelf, 「去搜索」 on 发现). A plain
+ * `navigate(Routes.SEARCH)` pushes the search screen **on top of** the shelf, and the next
+ * bottom-bar tap then pops both of them with `saveState = true` — which saves the pair as
+ * one segment — while `restoreState = true` puts that whole segment back, search included.
+ * The user sees a 书架 tap that lands them on the search screen, or looks like it did
+ * nothing at all, and only the tabs that were *not* pushed on top of another tab (发现,
+ * 设置) keep working.
+ *
+ * Two rules follow from that, and they are the whole reason this helper exists rather than
+ * a bare `navigate` at each call site:
+ *  * a tab route is only ever entered with the pop/save/restore options below;
+ *  * a screen that is not a tab (the reader, the login pages, a book's detail) uses a plain
+ *    `navigate`, because those are meant to sit on top of whatever opened them.
+ */
+private fun NavController.navigateToTab(route: String) {
+    if (currentDestination?.route == route) return
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Route transitions.
@@ -143,7 +171,6 @@ private val TaskExit: ExitTransition =
 @Composable
 fun AppNavHost(navController: NavHostController = rememberNavController()) {
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = bottomTabs.any { tab ->
         backStackEntry?.destination?.hierarchy?.any { it.route == tab.route } == true
     }
@@ -164,14 +191,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                         val selected = backStackEntry?.destination?.hierarchy?.any { it.route == tab.route } == true
                         NavigationBarItem(
                             selected = selected,
-                            onClick = {
-                                if (currentRoute == tab.route) return@NavigationBarItem
-                                navController.navigate(tab.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { navController.navigateToTab(tab.route) },
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
                             label = { Text(tab.label) },
                         )
@@ -194,14 +214,15 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
             composable(Routes.DISCOVER) {
                 DiscoverScreen(
                     onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) },
-                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
+                    // 搜索 is a tab, so it is entered as one even when a screen asks for it.
+                    onOpenSearch = { navController.navigateToTab(Routes.SEARCH) },
                 )
             }
             composable(Routes.SHELF) {
                 ShelfScreen(
                     onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) },
                     onContinueReading = { bookId, chapterId -> navController.navigate(Routes.reader(bookId, chapterId)) },
-                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
+                    onOpenSearch = { navController.navigateToTab(Routes.SEARCH) },
                     onOpenLogin = { navController.navigate(Routes.LOGIN) },
                 )
             }
