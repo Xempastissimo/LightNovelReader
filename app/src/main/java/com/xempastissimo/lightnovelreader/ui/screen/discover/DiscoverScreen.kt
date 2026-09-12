@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.RankType
@@ -76,7 +77,10 @@ data class DiscoverUiState(
 /** Which of the screen's mutually exclusive bodies is on show. */
 private enum class DiscoverPhase { LOADING, LOGIN, ERROR, EMPTY, CONTENT }
 
-class DiscoverViewModel(private val repository: BookRepository) : ViewModel() {
+class DiscoverViewModel(
+    private val repository: BookRepository,
+    private val refreshThrottle: RefreshThrottle,
+) : ViewModel() {
 
     private val _state = MutableStateFlow(DiscoverUiState())
     val state: StateFlow<DiscoverUiState> = _state.asStateFlow()
@@ -93,7 +97,18 @@ class DiscoverViewModel(private val repository: BookRepository) : ViewModel() {
         load(tab)
     }
 
-    fun refresh() = load(_state.value.tab)
+    /**
+     * The 刷新 button: the same request as [selectTab] on the current tab, but paced.
+     *
+     * A tap inside the two-second window is swallowed without a word — the list is
+     * already being re-read or has just been, and an error message about tapping too
+     * fast would be noise. [selectTab] itself is deliberately *not* throttled: it is a
+     * different request (another ranking), not a repeat of this one.
+     */
+    fun refresh() {
+        if (!refreshThrottle.tryAcquire()) return
+        load(_state.value.tab)
+    }
 
     /**
      * Called every time the screen comes back to the foreground.
@@ -103,6 +118,10 @@ class DiscoverViewModel(private val repository: BookRepository) : ViewModel() {
      * logged in must not stay on screen after they return from the login flow.
      * Nothing is re-fetched while the session is unchanged, which keeps the
      * polite request pacing intact.
+     *
+     * It reads directly instead of going through [refresh] because it is not a button
+     * press: the session change is what decides, and a tap on 刷新 a moment before
+     * signing in must not swallow the read that finally carries the session.
      */
     fun onResumed() {
         val loggedIn = repository.isLoggedIn()
@@ -111,7 +130,7 @@ class DiscoverViewModel(private val repository: BookRepository) : ViewModel() {
         // present: then the flag did not move, but the last load needed a login.
         val retryAfterLogin = loggedIn && _state.value.requiresLogin
         loadedWhileLoggedIn = loggedIn
-        if (sessionChanged || retryAfterLogin) refresh()
+        if (sessionChanged || retryAfterLogin) load(_state.value.tab)
     }
 
     private fun load(tab: DiscoverTab) {
@@ -143,7 +162,7 @@ class DiscoverViewModel(private val repository: BookRepository) : ViewModel() {
 
     companion object {
         fun factory(container: AppContainer) = AppViewModelFactory<DiscoverViewModel> {
-            DiscoverViewModel(it.bookRepository)
+            DiscoverViewModel(it.bookRepository, it.refreshThrottle)
         }
     }
 }

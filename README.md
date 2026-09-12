@@ -42,17 +42,18 @@
 - 发现页：榜单与最近更新
 - 搜索：标题/作者搜索 + 搜索历史
 - 书籍详情：封面、元信息、卷章目录、缓存全本
-- 书架：继续阅读（本地阅读记录）/ 在线书架 / 已缓存（本机已下载章节）
-- 阅读器：翻页阅读 + 目录跳转 + 阅读设置面板 + 章节切换横幅提示 + 音量键翻页（含反转）
-- 设置：账号管理、阅读外观（顶底栏配色、音量键翻页）、深色模式、存储管理、书源说明
+- 书架：继续阅读（本地阅读记录）/ 在线书架 / 已缓存（本机已下载章节）；同步结果与补全提示显示在页面底部
+- 阅读器：翻页阅读 + 目录跳转 + 阅读设置面板 + 章节切换横幅提示 + 音量键翻页（含反转）；进入阅读时隐藏系统状态栏，返回时自动恢复
+- 设置：账号管理、阅读外观（顶底栏配色、音量键翻页）、深色模式、存储管理、书源说明、开发者页（跳转项目 GitHub 主页）
+- 所有页面的刷新按钮限速 2 秒/次：窗口内的重复点击被静默忽略，不弹「刷新过快」提示
 
 ## 4. 快速开始
 
 ```bash
 .\gradlew.bat assembleDebug          # 构建 debug APK
 .\gradlew.bat installDebug           # 安装到已连接设备/模拟器
-.\gradlew.bat test                   # JVM 单元测试（94 个）
-.\gradlew.bat connectedAndroidTest   # 设备上的存储/持久化测试（6 个）
+.\gradlew.bat test                   # JVM 单元测试（144 个）
+.\gradlew.bat connectedAndroidTest   # 设备测试（8 个）
 ```
 
 | 组件 | 版本 |
@@ -85,6 +86,7 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
 │  ├─ network/HttpFetcher.kt       HttpURLConnection 封装：编码、Cookie、重试
 │  ├─ network/CookieStore.kt       持久化 cookie jar（JSON + 锁）
 │  ├─ network/RateLimiter.kt       串行限流 + 指数退避
+│  ├─ network/RefreshThrottle.kt   刷新按钮的 2 秒/次限速（静默丢弃窗口内的重复点击）
 │  ├─ source/BookSource.kt         书源接口（榜单/目录/详情/正文/在线书架；`bookSummary` 只取详情页元信息）
 │  ├─ source/wenku8/               首个书源的全部实现
 │  │  ├─ Wenku8Urls.kt             URL 模板 / 解析工具
@@ -247,7 +249,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 
 ## 9. 测试
 
-### JVM 单元测试（`app/src/test`，139 个）
+### JVM 单元测试（`app/src/test`，144 个）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -256,6 +258,7 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | `core/text/CharsetCodecTest` | GBK 探测与解码、meta charset、段落清洗 |
 | `data/network/CookieStoreTest` | domain/path/过期/`Max-Age`、持久化、原始 Cookie 导入、HTTP 日期解析 |
 | `data/network/RateLimiterTest` | 限流间隔、退避序列、重试判定（假时钟） |
+| `data/network/RefreshThrottleTest` | 刷新按钮的限速窗口：首次必过、窗口内丢弃、窗口过后放行、连点保持 2 秒下限而不被推迟（假时钟） |
 | `data/source/wenku8/Wenku8ParserTest` | 详情元信息、卷章目录、正文分块、插图与导航、登录墙识别、榜单/搜索条目（含封面取哪张）、书架、最近更新解析、封面推导、URL 工具 |
 | `data/source/wenku8/Wenku8SourceEndToEndTest` | 假 HTTP 层下的完整取数：书架总数与批量移除表单、详情→目录→正文、`bookSummary` 只读详情页而不读目录 |
 | `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载；同步**保留**站点页面没带的封面/文库/日期，`updateBook` 只补元信息、不动进度与缓存 |
@@ -282,6 +285,8 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | **浏览器内核通道的限制** | 每次取页面都会新建并销毁一个 WebView，比原生通道慢得多；且需要应用处于前台（后台时页面读取会明确失败）。图片与表单提交仍走原生通道。 |
 | **作者/榜单元信息不完整** | 榜单条目里的作者是可选字段，站点部分板块不提供。 |
 | **繁体版未接入** | 站点支持 `?charset=big5`，URL 层已预留，未做界面开关。 |
+| **刷新按钮限速 2 秒/次** | `RefreshThrottle`（`data/network`）在窗口内静默丢弃重复点击，不做任何显性提示：点太快时请求本就已经在路上，多一条「刷新过快」只是噪音。它是**用户手势**的节奏控制，不是 `RateLimiter` 的替代——后者管的是每一个请求，前者只管按钮。自动触发的读取（首次进入、会话变化后的重取、错误页重试）不走限速，否则一次点击会挡住真正需要的那次读取。 |
+| **阅读时隐藏状态栏** | 只隐藏状态栏（`statusBars()`），不隐藏导航栏：连导航栏一起隐藏会进入全沉浸模式，第一次滑动只用于把栏叫回来，键盘也要临时恢复系统栏。退出阅读时有状态在恢复，因此系统返回手势与页面返回按钮都一样。 |
 | **无 WorkManager 后台下载** | 缓存全本在进程内串行执行，退到后台可能被系统暂停；后续可迁到前台服务/WorkManager（需新增依赖）。 |
 | **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
 | **「已缓存」按磁盘目录统计** | 书单来自 `ChapterCache.offlineBooks()`（`library/{bookId}/*.json`），而不是书架行里的 `cachedChapterIds` 记录 —— 后者只在「缓存全本」完成时写入，在线阅读缓存的章节不会记进去。两者不一致时以磁盘为准。 |
@@ -307,7 +312,16 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 - `assembleDebug` 通过；APK 安装后**冷启动无异常**（`logcat` 无 `FATAL`）。
 - 底部四个页签（发现/书架/搜索/设置）均可正常进入并渲染：发现页显示榜单标签与状态、书架页显示「继续阅读/书架」、搜索页显示输入与历史、设置页显示账号/阅读外观/外观/存储/书源各分区。
 - 未登录时访问需鉴权的接口，界面显示明确文案与「去登录」入口，而不是空白或崩溃。
-- 设备端 8 个 instrumented 测试、JVM 91 个单元测试全部通过。
+- 设备端 8 个 instrumented 测试、JVM 144 个单元测试全部通过。
+
+### 本轮改动的真机复核（Android 真机，`adb` + 截图/`uiautomator`）
+
+| 改动 | 复核方式与结果 |
+|---|---|
+| 阅读时隐藏状态栏 | 进入阅读器后截图，顶部 0～300px 全为阅读底色 `rgb(252,252,250)`（纸张主题），系统时间/电量图标不再绘制，正文上移到屏幕顶端；按系统返回键退出后同一区域变回 `rgb(18,19,24)`，状态栏图标恢复。 |
+| 书架同步提示移至页面下方 | 点「同步站点在线书架」后，`uiautomator` 读到 snackbar「已同步 2 本」位于 `[131,2284][365,2350]`（屏幕 1260×2800），即页面底部、底部导航栏之上；列表行不再被遮挡。 |
+| 设置页开发者入口 | 设置页最下方可见「开发者」卡片，点按后前台 Activity 变为 `com.vivo.browser/.BrowserActivity`，地址栏为 `https://github.com…`。 |
+| 刷新限速 2 秒/次 | 约 0.93 秒内连发 6 次同步点击，持续轮询界面状态只观测到 **1 个**同步周期（3.3s 开始、5.7s 结束，随后「已同步 2 本」），第 2～6 次点击被静默丢弃且没有任何「刷新过快」提示；与之配套的 `RefreshThrottleTest` 覆盖窗口判定本身。 |
 
 封面路径在真站上复核过（用真实 Chrome 登录后读取首页与榜单 DOM，再用应用自身的 UA/Referer 请求图片）：
 

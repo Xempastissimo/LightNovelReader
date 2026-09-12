@@ -82,6 +82,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -508,12 +510,32 @@ fun ReaderScreen(
         view.context.findActivity()?.let { WindowCompat.getInsetsController(it.window, view) }
     }
     DisposableEffect(insetsController) {
-        val previousStatusBars = insetsController?.isAppearanceLightStatusBars
-        val previousNavigationBars = insetsController?.isAppearanceLightNavigationBars
+        val controller = insetsController
+        val previousStatusBars = controller?.isAppearanceLightStatusBars
+        val previousNavigationBars = controller?.isAppearanceLightNavigationBars
+
+        // Reading happens on the page, not on the status bar: while this screen is up the
+        // system's time/battery row is hidden, so the page — or the reader's own bar —
+        // reaches the top edge of the display.
+        //
+        // Only the status bar goes. The navigation bar stays because hiding it turns
+        // edge-to-edge into full immersive mode, where the first swipe is spent bringing it
+        // back and the keyboard needs either bar temporarily restored. `statusBars()`
+        // rather than `systemBars()` is what keeps the two apart.
+        //
+        // The inset is part of the same mechanism: with the status bar gone the top window
+        // inset is zero, so the reader's own top bar slides up into the space by itself.
+        // Swiping the hidden bar in still works, which is what the behaviour below buys.
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.statusBars())
+
+        // Everything is put back on the way out, whatever way the reader was left — the
+        // on-screen 返回 button, a system back gesture, or the screen being torn down.
         onDispose {
-            if (insetsController != null) {
-                previousStatusBars?.let { insetsController.isAppearanceLightStatusBars = it }
-                previousNavigationBars?.let { insetsController.isAppearanceLightNavigationBars = it }
+            if (controller != null) {
+                previousStatusBars?.let { controller.isAppearanceLightStatusBars = it }
+                previousNavigationBars?.let { controller.isAppearanceLightNavigationBars = it }
+                controller.show(WindowInsetsCompat.Type.statusBars())
             }
         }
     }

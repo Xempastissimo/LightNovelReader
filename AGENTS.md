@@ -84,4 +84,6 @@ filesDir/library/
 - 源站页面包含 `<input name="title">` 和多余的 `</br>` 标签，这两者会截断解析树；`core/html/Html.kt` 处理这些问题，`HtmlTest` 锁定了该行为。
 - 绝不绕过源站的反爬机制。Cloudflare 质询应通过 WebView 登录流程由用户完成，而非伪造请求。
 - 保持请求串行并限速（`RateLimiter`，最小间隔 900ms）。
+- 刷新按钮统一走 `RefreshThrottle`（`data/network`，2 秒/次，窗口内静默丢弃，不加「刷新过快」提示）。**自动触发的读取不要走它**——首次加载、会话变化后的重取、错误页重试都要立即发出，否则一次点击会挡住真正需要的那次读取。
+- 阅读器进入时只隐藏系统状态栏（`WindowInsetsCompat.Type.statusBars()`，不隐藏导航栏），退出时在 `onDispose` 里恢复。
 

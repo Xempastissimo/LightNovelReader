@@ -8,6 +8,7 @@ import com.xempastissimo.lightnovelreader.data.network.CookieStore
 import com.xempastissimo.lightnovelreader.data.network.HttpFetcher
 import com.xempastissimo.lightnovelreader.data.network.HttpUrlConnectionFetcher
 import com.xempastissimo.lightnovelreader.data.network.RateLimiter
+import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
 import com.xempastissimo.lightnovelreader.data.repo.ChapterCache
 import com.xempastissimo.lightnovelreader.data.repo.ImageLoader
@@ -36,6 +37,15 @@ class AppContainer(private val context: Context) {
 
     /** One pacer for the whole source: the site's limit is per client. */
     val rateLimiter: RateLimiter by lazy { RateLimiter() }
+
+    /**
+     * One limiter for every 刷新 button in the app.
+     *
+     * Shared on purpose: the screens are separate, but they all re-read the same
+     * site on the same connection, so two of them tapped in quick succession are
+     * still one client hitting the source twice within two seconds.
+     */
+    val refreshThrottle: RefreshThrottle by lazy { RefreshThrottle() }
 
     val httpFetcher: HttpFetcher by lazy {
         HttpUrlConnectionFetcher(

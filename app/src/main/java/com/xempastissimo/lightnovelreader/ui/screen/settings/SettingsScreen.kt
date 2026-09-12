@@ -1,5 +1,8 @@
 package com.xempastissimo.lightnovelreader.ui.screen.settings
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -7,8 +10,11 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,8 +26,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,6 +45,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -218,6 +226,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -457,6 +466,30 @@ fun SettingsScreen(
                 }
             }
 
+            // -------------------------------------------------------- developer
+            // The last card in the list, and the only one that leaves the app: it opens
+            // the project's GitHub page so issues and PRs have an address the user can
+            // actually reach from here.
+            SettingsCard(
+                title = "开发者",
+                onClick = { context.openInBrowser(DEVELOPER_PAGE_URL) },
+            ) {
+                Text(
+                    text = "GitHub 项目主页",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = DEVELOPER_PAGE_URL,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = "点击此处打开项目主页，可以查看源码、反馈问题或提交 PR。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             Text(
                 text = "轻小说阅读器 · 框架演示版",
                 style = MaterialTheme.typography.labelSmall,
@@ -469,11 +502,49 @@ fun SettingsScreen(
     SnackbarHost(hostState = snackbarHostState)
 }
 
+/**
+ * One section of the settings list: a hairline outline, no fill.
+ *
+ * The sections used to be filled with `surface`, which is a shade lighter than the page's
+ * own background (`NightSurface` / `PaperSurface` against `NightBackground` / `PaperWarm`),
+ * so the page read as a stack of raised slabs rather than one background with sections on
+ * it. Only the border and the section title separate them now.
+ *
+ * This is a `Surface` and not a `Card` on purpose. `Card` passes its container colour
+ * through `surfaceColorAtElevation`, which replaces a *transparent* colour with an opaque
+ * tonal-elevation one — `cardColors(containerColor = Color.Transparent)` therefore still
+ * paints a raised tile, and there is no way to opt out from the outside. `Surface` paints
+ * the colour it is given, so `Color.Transparent` really is nothing.
+ *
+ * [onClick] is null for the purely informational sections; those must not ripple — or be
+ * announced as buttons — when the user taps their text.
+ */
 @Composable
-private fun SettingsCard(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+private fun SettingsCard(
+    title: String,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick == null) {
+                    Modifier
+                } else {
+                    Modifier.clickable(
+                        onClick = onClick,
+                        role = Role.Button,
+                        // Without this a `clickable` inside a lazy list draws the
+                        // ripple of whatever scrolled under the finger.
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                    )
+                },
+            ),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -484,6 +555,16 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
             content()
         }
     }
+}
+
+/**
+ * Hands a link to whatever the device has: a browser, or a chooser if there is more
+ * than one. Does nothing when there is nothing at all — a settings card must not crash
+ * over a missing browser.
+ */
+private fun Context.openInBrowser(url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { startActivity(intent) }
 }
 
 @Composable
@@ -601,6 +682,9 @@ private fun ReaderBarColorEditor(
 
     TextButton(onClick = onReset) { Text("恢复默认蓝色") }
 }
+
+/** The project's GitHub page, opened by the 开发者 card at the foot of the screen. */
+private const val DEVELOPER_PAGE_URL = "https://github.com/Xempastissimo/LightNovelReader"
 
 /** A miniature of the reader's bars, so the colour can be judged before it is used. */
 @Composable

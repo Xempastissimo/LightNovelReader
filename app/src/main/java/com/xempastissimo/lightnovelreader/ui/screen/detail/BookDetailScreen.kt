@@ -47,6 +47,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
 import com.xempastissimo.lightnovelreader.data.source.BookSource
@@ -94,6 +95,7 @@ class BookDetailViewModel(
     private val repository: BookRepository,
     private val shelfRepository: ShelfRepository,
     private val source: BookSource,
+    private val refreshThrottle: RefreshThrottle,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BookDetailUiState())
@@ -140,6 +142,20 @@ class BookDetailViewModel(
                     _state.update { it.copy(loading = false, error = error.toUserMessage()) }
                 }
         }
+    }
+
+    /**
+     * The 刷新 button: re-reads the detail page and its catalog, ignoring the cache.
+     *
+     * Paced because the button can be tapped repeatedly and every tap is a page load,
+     * but a tap inside the two-second window is swallowed silently rather than
+     * reported — the answer to it is already on its way. The screen's first read
+     * ([load] from `init`) is not throttled: it is not a button press, and the user
+     * opening a book should never wait out a window they never used.
+     */
+    fun refresh() {
+        if (!refreshThrottle.tryAcquire()) return
+        load(forceRefresh = true)
     }
 
     /**
@@ -239,7 +255,7 @@ class BookDetailViewModel(
 
     companion object {
         fun factory(container: AppContainer, bookId: Int) = AppViewModelFactory<BookDetailViewModel> {
-            BookDetailViewModel(bookId, it.bookRepository, it.shelfRepository, it.bookSource)
+            BookDetailViewModel(bookId, it.bookRepository, it.shelfRepository, it.bookSource, it.refreshThrottle)
         }
     }
 }
@@ -283,7 +299,7 @@ fun BookDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.load(forceRefresh = true) }) {
+                    IconButton(onClick = viewModel::refresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
                     }
                     IconButton(onClick = viewModel::toggleShelf) {
@@ -321,7 +337,7 @@ fun BookDetailScreen(
                         title = "加载失败",
                         hint = state.error,
                         actionLabel = "重试",
-                        onAction = { viewModel.load(forceRefresh = true) },
+                        onAction = viewModel::refresh,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = 80.dp),
