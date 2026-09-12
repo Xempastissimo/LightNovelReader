@@ -18,7 +18,7 @@
 - [6. 分层与数据流](#6-分层与数据流)
 - [7. 书源映射（wenku8）](#7-书源映射wenku8)
 - [8. 抓取策略与边界](#8-抓取策略与边界)
-- [9. 测试](#9-测试)
+- [9. 测试](#9-测试)（含 [Compose 预览](#compose-预览preview不是测试但同样不跑设备)）
 - [10. 已知限制（有意为之）](#10-已知限制有意为之)
 - [11. 验证记录](#11-验证记录)
 - [12. 许可与使用边界](#12-许可与使用边界)
@@ -28,6 +28,21 @@
 ## 1. 做这个项目的灵感
 
 逛了下Github，感觉轻小说文库没几个好用的安卓端app，于是我斥点小资用AI（主要用的Deepseek v4.1 Flash，最新出的这个模型确实快）做一个类似的app，至少基本功能都有，不过有些功能还在开发中，欢迎在issue反馈或者提交PR，如果有可行的方案我会尝试。
+
+已实现内容（后续会继续更新）：
+
+- [x] 搜索功能（支持搜索历史）
+- [x] 主页面深色模式切换
+- [x] 字体调整
+- [x] 阅读背景调整
+- [x] 网站源与设备书架同步
+- [x] 历史同步（仅具体到xx卷）
+- [ ] 本地书签bookmark
+- [ ] 轻小说txt下载
+- [ ] 简繁切换
+- [ ] 翻页模式
+- [ ] 自动更新
+- [ ] ……
 
 ---
 
@@ -112,7 +127,7 @@ app/src/main/java/com/xempastissimo/lightnovelreader/
       ├─ search/                   标题/作者搜索 + 历史
       ├─ detail/                   封面、元信息、卷章目录、缓存全本
       ├─ shelf/                    继续阅读（本地阅读记录）/ 书架（**只显示站点账号里的收藏**）/ 已缓存（本机已下载的章节）
-      ├─ settings/                 账号、阅读外观（含顶底栏配色、音量键翻页与反转）、深色模式、存储、书源说明
+      ├─ settings/                 账号、阅读外观（含顶底栏配色、音量键翻页与反转）、深色模式、存储、书源说明、开发者页；`SettingsScreenPreviews.kt` 放整屏 `@Preview`（多状态下拉）
       ├─ login/                    原生表单 + 浏览器登录（人机校验）+ 粘贴 Cookie
       └─ reader/                   翻页阅读器 + 目录 + 阅读设置面板 + 章节切换横幅提示
 ```
@@ -267,6 +282,30 @@ TLS/HTTP2 请求指纹，所以有效 Cookie 也不够。
 | `ui/screen/reader/VolumeKeyPageStepTest` | 音量键翻页的默认方向与「反转音量翻页」的互换、其他按键不参与 |
 
 解析类测试使用**结构等价、文案中性**的 HTML 片段（与真实页面的标签/类名/嵌套一致），不保存站点正文。
+
+### Compose 预览（`@Preview`，不是测试但同样不跑设备）
+
+界面改动可以完全在 Android Studio 的 Preview 面板里调，不必装到手机上。为此每个界面被拆成两半：
+
+```
+settings/
+├─ SettingsScreen.kt           有状态外壳 SettingsScreen()（取 ViewModel）+ 无状态 SettingsContent(state, actions)
+└─ SettingsScreenPreviews.kt   整屏预览（4 个状态 × 浅色/夜间）
+```
+
+`@Preview` 拿不到 `ViewModel`，所以**只有无状态的那半能预览**——这就是拆分的原因。预览分两类放置：
+
+| 位置 | 内容 | 面板里的名字 |
+|---|---|---|
+| 组件文件末尾（`SettingsCard`、`SwitchRow`、`BookCard`…） | 叶子组件 | 「分区卡片 · 浅色」「分区卡片 · 夜间」「开关 · 开」「开关 · 关」…… |
+| 独立的 `*Previews.kt` | 整屏、多状态 | 「设置 · 未登录」「设置 · 已登录」「设置 · 夜间」…… |
+
+- 多状态用 `@PreviewParameter` 提供：面板顶部的下拉框直接切换「未登录 / 已登录 / 诊断失败 / 调过栏色」四种假状态，**不改代码**。
+- 夜间配色用 `uiMode = Configuration.UI_MODE_NIGHT_YES` 复制一份预览，于是同一次改动能在浅色和夜间并排看。
+- 预览里**固定 `dynamicColor = false`**：动态取色来自用户壁纸，用它预览会让每台机器的颜色都不一样，判断不了对比度。预览用应用自己的纸张配色。
+- `PreviewParameterProvider` 及其 `values` 不能是 `private`，否则编译通过但面板里报找不到（工具用反射解析）。
+
+> 如果面板显示「No preview found」：确认当前打开的是带 `@Preview` 的文件（整屏预览在 `*Previews.kt` 里），并确认预览对应的是 **debug** 变体——`ui-tooling` 只挂在 `debugImplementation` 上，切到 release 就没有预览。
 
 ### 设备测试（`app/src/androidTest`，8 个）
 

@@ -226,7 +226,6 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val context = LocalContext.current
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -234,6 +233,82 @@ fun SettingsScreen(
             viewModel.consumeMessage()
         }
     }
+
+    SettingsContent(
+        state = state,
+        actions = SettingsActions(
+            onOpenLogin = onOpenLogin,
+            onLogout = viewModel::logout,
+            onFontSize = viewModel::setFontSize,
+            onLineHeight = viewModel::setLineHeight,
+            onParagraphSpacing = viewModel::setParagraphSpacing,
+            onHorizontalPadding = viewModel::setHorizontalPadding,
+            onReaderTheme = viewModel::setReaderTheme,
+            onVolumeKeyPaging = viewModel::setVolumeKeyPaging,
+            onInvertVolumeKeyPaging = viewModel::setInvertVolumeKeyPaging,
+            onKeepScreenOn = viewModel::setKeepScreenOn,
+            onBarFollowsTheme = viewModel::setBarFollowsTheme,
+            onBarHue = viewModel::setBarHue,
+            onBarSaturation = viewModel::setBarSaturation,
+            onBarValue = viewModel::setBarValue,
+            onResetBarColor = viewModel::resetBarColor,
+            onThemeMode = viewModel::setThemeMode,
+            onDynamicColor = viewModel::setDynamicColor,
+            onClearImageCache = viewModel::clearImageCache,
+            onClearOfflineBooks = viewModel::clearOfflineBooks,
+            onProbeBrowserEngine = viewModel::probeBrowserEngine,
+        ),
+    )
+
+    SnackbarHost(hostState = snackbarHostState)
+}
+
+/**
+ * Everything the settings list can do, in one value.
+ *
+ * Bundled into a data class with a default for each entry so the screen's body takes two
+ * parameters instead of twenty, and so a preview can render the whole list by supplying
+ * only the state. The defaults are deliberate no-ops rather than `{}`-style omissions: a
+ * preview must not need a view model to exist, and a missing callback is a compile error
+ * here rather than a dead button in the panel.
+ */
+data class SettingsActions(
+    val onOpenLogin: () -> Unit = {},
+    val onLogout: () -> Unit = {},
+    val onFontSize: (Float) -> Unit = {},
+    val onLineHeight: (Float) -> Unit = {},
+    val onParagraphSpacing: (Int) -> Unit = {},
+    val onHorizontalPadding: (Int) -> Unit = {},
+    val onReaderTheme: (ReaderTheme) -> Unit = {},
+    val onVolumeKeyPaging: (Boolean) -> Unit = {},
+    val onInvertVolumeKeyPaging: (Boolean) -> Unit = {},
+    val onKeepScreenOn: (Boolean) -> Unit = {},
+    val onBarFollowsTheme: (Boolean) -> Unit = {},
+    val onBarHue: (Float) -> Unit = {},
+    val onBarSaturation: (Float) -> Unit = {},
+    val onBarValue: (Float) -> Unit = {},
+    val onResetBarColor: () -> Unit = {},
+    val onThemeMode: (ThemeMode) -> Unit = {},
+    val onDynamicColor: (Boolean) -> Unit = {},
+    val onClearImageCache: () -> Unit = {},
+    val onClearOfflineBooks: () -> Unit = {},
+    val onProbeBrowserEngine: () -> Unit = {},
+)
+
+/**
+ * The settings list itself.
+ *
+ * Stateless and view-model-free on purpose: it is what the `@Preview`s render, so a
+ * section can be adjusted in Android Studio without installing the app. The screen above
+ * is the only part that knows about [SettingsViewModel].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsContent(
+    state: SettingsUiState,
+    actions: SettingsActions = SettingsActions(),
+) {
+    val context = LocalContext.current
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(title = { Text("设置") })
@@ -257,7 +332,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedButton(onClick = viewModel::logout, modifier = Modifier.padding(top = 8.dp)) {
+                    OutlinedButton(onClick = actions.onLogout, modifier = Modifier.padding(top = 8.dp)) {
                         Text("退出登录")
                     }
                 } else {
@@ -266,7 +341,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = onOpenLogin, modifier = Modifier.padding(top = 8.dp)) {
+                    Button(onClick = actions.onOpenLogin, modifier = Modifier.padding(top = 8.dp)) {
                         Text("登录书源账号")
                     }
                 }
@@ -280,7 +355,7 @@ fun SettingsScreen(
                 )
                 Slider(
                     value = state.reader.fontSizeSp,
-                    onValueChange = viewModel::setFontSize,
+                    onValueChange = actions.onFontSize,
                     valueRange = ReaderSettings.MIN_FONT_SIZE..ReaderSettings.MAX_FONT_SIZE,
                     steps = 19,
                 )
@@ -291,7 +366,7 @@ fun SettingsScreen(
                 )
                 Slider(
                     value = state.reader.lineHeightMultiplier,
-                    onValueChange = viewModel::setLineHeight,
+                    onValueChange = actions.onLineHeight,
                     valueRange = ReaderSettings.MIN_LINE_HEIGHT..ReaderSettings.MAX_LINE_HEIGHT,
                 )
 
@@ -301,7 +376,7 @@ fun SettingsScreen(
                 )
                 Slider(
                     value = state.reader.paragraphSpacingDp.toFloat(),
-                    onValueChange = { viewModel.setParagraphSpacing(it.toInt()) },
+                    onValueChange = { actions.onParagraphSpacing(it.toInt()) },
                     valueRange = 0f..40f,
                 )
 
@@ -311,7 +386,7 @@ fun SettingsScreen(
                 )
                 Slider(
                     value = state.reader.horizontalPaddingDp.toFloat(),
-                    onValueChange = { viewModel.setHorizontalPadding(it.toInt()) },
+                    onValueChange = { actions.onHorizontalPadding(it.toInt()) },
                     valueRange = 0f..48f,
                 )
 
@@ -320,22 +395,22 @@ fun SettingsScreen(
                     options = ReaderTheme.entries,
                     selected = state.reader.theme,
                     label = { it.label },
-                    onSelect = viewModel::setReaderTheme,
+                    onSelect = actions.onReaderTheme,
                 )
 
                 ReaderBarColorEditor(
                     settings = state.reader,
-                    onFollowsTheme = viewModel::setBarFollowsTheme,
-                    onHue = viewModel::setBarHue,
-                    onSaturation = viewModel::setBarSaturation,
-                    onValue = viewModel::setBarValue,
-                    onReset = viewModel::resetBarColor,
+                    onFollowsTheme = actions.onBarFollowsTheme,
+                    onHue = actions.onBarHue,
+                    onSaturation = actions.onBarSaturation,
+                    onValue = actions.onBarValue,
+                    onReset = actions.onResetBarColor,
                 )
 
                 SwitchRow(
                     title = "音量键翻页",
                     checked = state.reader.volumeKeyPaging,
-                    onCheckedChange = viewModel::setVolumeKeyPaging,
+                    onCheckedChange = actions.onVolumeKeyPaging,
                 )
                 Text(
                     text = "开启后，音量减键翻到下一页、音量加键翻回上一页。" +
@@ -361,7 +436,7 @@ fun SettingsScreen(
                         SwitchRow(
                             title = "反转音量翻页",
                             checked = state.reader.invertVolumeKeyPaging,
-                            onCheckedChange = viewModel::setInvertVolumeKeyPaging,
+                            onCheckedChange = actions.onInvertVolumeKeyPaging,
                         )
                         Text(
                             text = "方向反过来：音量加键翻到下一页、音量减键翻回上一页。",
@@ -374,7 +449,7 @@ fun SettingsScreen(
                 SwitchRow(
                     title = "阅读时保持屏幕常亮",
                     checked = state.reader.keepScreenOn,
-                    onCheckedChange = viewModel::setKeepScreenOn,
+                    onCheckedChange = actions.onKeepScreenOn,
                 )
             }
 
@@ -385,7 +460,7 @@ fun SettingsScreen(
                     options = ThemeMode.entries,
                     selected = state.app.themeMode,
                     label = { it.label },
-                    onSelect = viewModel::setThemeMode,
+                    onSelect = actions.onThemeMode,
                 )
                 Text(
                     text = "「跟随系统」会随手机的深色模式设置一起切换。",
@@ -396,7 +471,7 @@ fun SettingsScreen(
                 SwitchRow(
                     title = "使用系统动态取色",
                     checked = state.app.useDynamicColor,
-                    onCheckedChange = viewModel::setDynamicColor,
+                    onCheckedChange = actions.onDynamicColor,
                 )
                 Text(
                     text = "关闭时使用应用自带的纸张配色，阅读更统一。",
@@ -419,8 +494,8 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(top = 8.dp),
                 ) {
-                    OutlinedButton(onClick = viewModel::clearImageCache) { Text("清理图片缓存") }
-                    OutlinedButton(onClick = viewModel::clearOfflineBooks) { Text("清理离线章节") }
+                    OutlinedButton(onClick = actions.onClearImageCache) { Text("清理图片缓存") }
+                    OutlinedButton(onClick = actions.onClearOfflineBooks) { Text("清理离线章节") }
                 }
             }
 
@@ -446,7 +521,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 6.dp),
                 )
                 OutlinedButton(
-                    onClick = viewModel::probeBrowserEngine,
+                    onClick = actions.onProbeBrowserEngine,
                     enabled = !state.probing,
                     modifier = Modifier.padding(top = 6.dp),
                 ) {
@@ -498,8 +573,6 @@ fun SettingsScreen(
             )
         }
     }
-
-    SnackbarHost(hostState = snackbarHostState)
 }
 
 /**
@@ -711,10 +784,10 @@ private fun ReaderBarPreview(bar: ReaderBarPalette) {
     }
 }
 
-@Preview(showBackground = true, widthDp = 360)
+@Preview(name = "分区卡片 · 浅色", showBackground = true, widthDp = 360)
 @Composable
 private fun SettingsCardPreview() {
-    LightNovelReaderTheme {
+    LightNovelReaderTheme(dynamicColor = false) {
         SettingsCard(title = "阅读外观") {
             Text("字号 16 sp", style = MaterialTheme.typography.bodyMedium)
             Text("行距 1.5 倍", style = MaterialTheme.typography.bodyMedium)
@@ -722,7 +795,24 @@ private fun SettingsCardPreview() {
     }
 }
 
-@Preview(showBackground = true, widthDp = 360)
+/** The same section at night: the border has to carry the shape without the fill. */
+@Preview(
+    name = "分区卡片 · 夜间",
+    showBackground = true,
+    widthDp = 360,
+    uiMode = android.content.res.Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun SettingsCardNightPreview() {
+    LightNovelReaderTheme(darkTheme = true, dynamicColor = false) {
+        SettingsCard(title = "阅读外观") {
+            Text("字号 16 sp", style = MaterialTheme.typography.bodyMedium)
+            Text("行距 1.5 倍", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Preview(name = "开关 · 开", showBackground = true, widthDp = 360)
 @Composable
 private fun SwitchRowPreview() {
     LightNovelReaderTheme {
@@ -730,7 +820,7 @@ private fun SwitchRowPreview() {
     }
 }
 
-@Preview(showBackground = true, widthDp = 360)
+@Preview(name = "开关 · 关", showBackground = true, widthDp = 360)
 @Composable
 private fun SwitchRowOffPreview() {
     LightNovelReaderTheme {

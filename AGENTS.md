@@ -86,4 +86,8 @@ filesDir/library/
 - 保持请求串行并限速（`RateLimiter`，最小间隔 900ms）。
 - 刷新按钮统一走 `RefreshThrottle`（`data/network`，2 秒/次，窗口内静默丢弃，不加「刷新过快」提示）。**自动触发的读取不要走它**——首次加载、会话变化后的重取、错误页重试都要立即发出，否则一次点击会挡住真正需要的那次读取。
 - 阅读器进入时只隐藏系统状态栏（`WindowInsetsCompat.Type.statusBars()`，不隐藏导航栏），退出时在 `onDispose` 里恢复。
+- 每个界面（Screen）都拆成「有状态外壳 + 无状态 Content」两半：`SettingsScreen`（取 `ViewModel`）与 `SettingsContent(state, actions)`（纯渲染）。**拆分的目的就是预览**——`@Preview` 拿不到 `ViewModel`，只有无状态的那半能在 Android Studio 的 Preview 面板里渲染。
+- `@Preview` 分两类放置：叶子组件（`SettingsCard`、`SwitchRow`、`BookCard`……）的预览留在原文件末尾；**整屏预览放在独立的 `*Previews.kt`**（如 `SettingsScreenPreviews.kt`），以免预览用的假数据混进业务代码。
+- 用 `@PreviewParameter` 提供多状态（未登录 / 已登录 / 诊断失败……），面板顶部的下拉框即可切换，无需改代码；用 `uiMode = UI_MODE_NIGHT_YES` 提供夜间配色，并且**固定 `dynamicColor = false`**——动态取色取自用户壁纸，用它预览会导致每台机器颜色都不同，无法用来判断对比度。
+- `PreviewParameterProvider` 及其 `values` 不要声明为 `private`：预览工具通过反射解析，私有会编译通过但面板里报找不到。
 
