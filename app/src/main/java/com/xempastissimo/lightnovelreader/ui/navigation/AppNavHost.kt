@@ -39,6 +39,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.xempastissimo.lightnovelreader.domain.model.Book
+import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.component.Motion
 import com.xempastissimo.lightnovelreader.ui.screen.detail.BookDetailScreen
 import com.xempastissimo.lightnovelreader.ui.screen.discover.DiscoverScreen
@@ -175,6 +177,15 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
         backStackEntry?.destination?.hierarchy?.any { it.route == tab.route } == true
     }
 
+    // A list row hands the book it was showing to the detail screen before the route change:
+    // that copy is what lets the book's page draw its cover, title and 文库 immediately,
+    // instead of a full-screen spinner while the source is read (see BookRepository.summary).
+    val bookRepository = LocalAppContainer.current.bookRepository
+    val openBook: (Book) -> Unit = { book ->
+        bookRepository.rememberSummary(book)
+        navController.navigate(Routes.bookDetail(book.bookId))
+    }
+
     Scaffold(
         bottomBar = {
             AnimatedVisibility(
@@ -213,21 +224,21 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
         ) {
             composable(Routes.DISCOVER) {
                 DiscoverScreen(
-                    onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) },
+                    onOpenBook = openBook,
                     // 搜索 is a tab, so it is entered as one even when a screen asks for it.
                     onOpenSearch = { navController.navigateToTab(Routes.SEARCH) },
                 )
             }
             composable(Routes.SHELF) {
                 ShelfScreen(
-                    onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) },
+                    onOpenBook = openBook,
                     onContinueReading = { bookId, chapterId -> navController.navigate(Routes.reader(bookId, chapterId)) },
                     onOpenSearch = { navController.navigateToTab(Routes.SEARCH) },
                     onOpenLogin = { navController.navigate(Routes.LOGIN) },
                 )
             }
             composable(Routes.SEARCH) {
-                SearchScreen(onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) })
+                SearchScreen(onOpenBook = openBook)
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(onOpenLogin = { navController.navigate(Routes.LOGIN) })

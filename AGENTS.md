@@ -96,7 +96,12 @@ filesDir/packs/
 - 绝不绕过源站的反爬机制。Cloudflare 质询应通过 WebView 登录流程由用户完成，而非伪造请求。
 - 保持请求串行并限速（`RateLimiter`，最小间隔 900ms）。
 - 刷新按钮统一走 `RefreshThrottle`（`data/network`，2 秒/次，窗口内静默丢弃，不加「刷新过快」提示）。**自动触发的读取不要走它**——首次加载、会话变化后的重取、错误页重试都要立即发出，否则一次点击会挡住真正需要的那次读取。
-- 阅读器进入时只隐藏系统状态栏（`WindowInsetsCompat.Type.statusBars()`，不隐藏导航栏），退出时在 `onDispose` 里恢复。
+- 发现页的榜单按页签留在 `DiscoverViewModel` 的内存里（`DiscoverUiState.tabs`，每个页签一份 `DiscoverTabState`，`books == null` 表示本进程还没读过），**只在冷启动与手动刷新时取数**：切页签、从详情页返回、回到前台都不得新增请求（会话变化后修复失败态的重取是唯一允许的自动路径）。"要不要取数"的判断在 `DiscoverTabs.kt`（纯函数、有测试），不要绕过它去直接发请求。
+- 列表点进详情页必须先交接这一行的 `Book`：走 `AppNavHost` 里的 `openBook`（内部 `BookRepository.rememberSummary`），详情页靠它画首帧的封面/标题/作者/文库。新增列表入口时要接上同一个 `openBook`，否则新页面又回到「整屏转圈」。该交接**只是提示、不是缓存**：`BookRepository.detail()` 仍然每次都读站点。
+- 发现页的左右划动由 `HorizontalPager`（`DiscoverScreen.kt`，页签即页）提供：页面跟手、松手后回弹或落到相邻页签、一甩最多一格。取数仍只在**落定**时触发（`pagerState.settledPage` → `selectTab` → `DiscoverTabs.kt` 的纯函数），所以半途拖回不取数、已读过的页签也不取数。每个页签各画一份 `DiscoverTabState`，相邻页预组合；改动手势时同时要保证竖向滚动与卡片点击都不受影响。
+- 阅读器的系统状态栏是**遮罩的一部分**：`showMenu`（顶底栏是否在）为真就 `show(WindowInsetsCompat.Type.statusBars())`，为假就 `hide(...)`——单点唤出顶底栏时状态栏一起出现，顶底栏收起（含 5 秒自动收起）时一起消失。只动状态栏，导航栏始终不动（连它一起隐藏会进入全沉浸模式）；退出时在 `onDispose` 里无条件恢复。
+- 顶栏的 `windowInsets` 用 `statusBarsIgnoringVisibility` 的高度（`animateDpAsState` 过渡）：顶底栏在时给状态栏留出位置，收起时归零。别直接用 `WindowInsets.statusBars`——系统 inset 要几百毫秒后才反映显示/隐藏，跟着它布局会让标题先按一种高度进场、再跳 138px。
+- 阅读设置来自 DataStore，是异步的：**在 `settingsLoaded` 之前不要用默认 `ReaderSettings()` 画任何东西**（阅读底色用应用自己的背景色顶替、顶栏底栏干脆不显示），否则深色模式下会先闪一版默认米黄纸 + 默认蓝栏。首次把真实主题落上去要**直接生效**（`key(settingsLoaded)` 重建动画状态），只有用户在设置面板里换主题才渐变。
 - 每个界面（Screen）都拆成「有状态外壳 + 无状态 Content」两半：`SettingsScreen`（取 `ViewModel`）与 `SettingsContent(state, actions)`（纯渲染）。**拆分的目的就是预览**——`@Preview` 拿不到 `ViewModel`，只有无状态的那半能在 Android Studio 的 Preview 面板里渲染。
 - `@Preview` 分两类放置：叶子组件（`SettingsCard`、`SwitchRow`、`BookCard`……）的预览留在原文件末尾；**整屏预览放在独立的 `*Previews.kt`**（如 `SettingsScreenPreviews.kt`），以免预览用的假数据混进业务代码。
 - 用 `@PreviewParameter` 提供多状态（未登录 / 已登录 / 诊断失败……），面板顶部的下拉框即可切换，无需改代码；用 `uiMode = UI_MODE_NIGHT_YES` 提供夜间配色，并且**固定 `dynamicColor = false`**——动态取色取自用户壁纸，用它预览会导致每台机器颜色都不同，无法用来判断对比度。

@@ -180,6 +180,38 @@ class BookRepository(
 
     private val detailCache = HashMap<Int, BookDetail>(8)
 
+    /**
+     * What a list just showed about a book, so the page opened from that list can draw its
+     * cover, title, author and 文库 before the source has answered.
+     *
+     * A hand-off rather than a cache: it is written when the user taps a row and read once, by
+     * the detail screen's first frame. [detail] deliberately does not consult it — a summary
+     * is never a substitute for the site's own page, and letting one stand in would mean a
+     * book opened from a list could never pick up a chapter tree.
+     *
+     * Bounded because it is written on every tap: the oldest row is dropped instead of the map
+     * growing for the life of the process.
+     */
+    private val summaries = LinkedHashMap<Int, Book>()
+
+    /** Hands a list row to whatever screen the tap opens. */
+    fun rememberSummary(book: Book) {
+        summaries.remove(book.bookId)
+        summaries[book.bookId] = book
+        while (summaries.size > MAX_REMEMBERED_SUMMARIES) {
+            val oldest = summaries.keys.firstOrNull() ?: break
+            summaries.remove(oldest)
+        }
+    }
+
+    /**
+     * The book as a list showed it, or the book of a detail already read.
+     *
+     * Null means nothing is known yet and the caller has to show its loading state, which is
+     * what happens after a process restart: the hand-off does not survive it.
+     */
+    fun summary(bookId: Int): Book? = summaries[bookId] ?: detailCache[bookId]?.book
+
     suspend fun recentUpdates() = source.recentUpdates()
 
     /** Whether the underlying source currently holds a signed-in session. */
@@ -404,6 +436,11 @@ class BookRepository(
 
     fun invalidate(bookId: Int) {
         detailCache.remove(bookId)
+    }
+
+    private companion object {
+        /** How many rows' worth of list metadata to keep for the next screen's first frame. */
+        const val MAX_REMEMBERED_SUMMARIES = 32
     }
 }
 

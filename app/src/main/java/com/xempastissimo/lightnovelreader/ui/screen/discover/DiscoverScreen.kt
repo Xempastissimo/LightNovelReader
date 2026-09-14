@@ -1,32 +1,31 @@
 package com.xempastissimo.lightnovelreader.ui.screen.discover
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -36,12 +35,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xempastissimo.lightnovelreader.data.network.HttpFailure
 import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.RankType
 import com.xempastissimo.lightnovelreader.ui.AppContainer
 import com.xempastissimo.lightnovelreader.ui.AppViewModelFactory
+import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.component.BookCard
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
@@ -64,18 +65,51 @@ enum class DiscoverTab(val label: String, val rankType: RankType?, val fullOnly:
     FINISHED("完结", RankType.FULL_FLAG, fullOnly = true),
 }
 
-data class DiscoverUiState(
-    val tab: DiscoverTab = DiscoverTab.RECENT,
-    val books: List<Book> = emptyList(),
+/** Which of a tab's mutually exclusive bodies is on show. */
+enum class DiscoverPhase { LOADING, LOGIN, ERROR, EMPTY, CONTENT }
+
+/**
+ * What one tab's body has to show.
+ *
+ * Kept per tab rather than only for the selected one because the pager draws the neighbouring
+ * pages as well: a tab whose list was read earlier in this session is already on screen by the
+ * time the finger reveals it, which is what makes the drag feel like it is moving real pages
+ * rather than blanks that fill in afterwards.
+ */
+data class DiscoverTabState(
+    /**
+     * `null` is "this session never read this tab" — deliberately *not* the same as a read that
+     * came back empty, because an empty ranking must not be read again (see [tabAction]).
+     */
+    val books: List<Book>? = null,
     val loading: Boolean = false,
     val error: String? = null,
     val requiresLogin: Boolean = false,
 ) {
-    val isEmpty: Boolean get() = !loading && error == null && books.isEmpty()
+    val phase: DiscoverPhase
+        get() = when {
+            loading -> DiscoverPhase.LOADING
+            requiresLogin -> DiscoverPhase.LOGIN
+            error != null -> DiscoverPhase.ERROR
+            books.isNullOrEmpty() -> DiscoverPhase.EMPTY
+            else -> DiscoverPhase.CONTENT
+        }
 }
 
-/** Which of the screen's mutually exclusive bodies is on show. */
-private enum class DiscoverPhase { LOADING, LOGIN, ERROR, EMPTY, CONTENT }
+data class DiscoverUiState(
+    /** The tab the pager has settled on: the one whose body the rest of the screen describes. */
+    val tab: DiscoverTab = DiscoverTab.RECENT,
+    val tabs: Map<DiscoverTab, DiscoverTabState> = emptyMap(),
+) {
+    /**
+     * The body for [tab].
+     *
+     * A tab this session knows nothing about reads as its spinner rather than as 暂无内容: the
+     * pager shows the neighbour while a finger drags it in, and the read only starts once the
+     * drag settles — the empty message would flash for that moment.
+     */
+    fun tabState(tab: DiscoverTab): DiscoverTabState = tabs[tab] ?: DiscoverTabState(loading = true)
+}
 
 class DiscoverViewModel(
     private val repository: BookRepository,
@@ -88,13 +122,21 @@ class DiscoverViewModel(
     /** Session state the list currently on screen was fetched with. */
     private var loadedWhileLoggedIn = repository.isLoggedIn()
 
+    /** The tabs with a read in flight right now, so one tab is never read twice over. */
+    private val loadingTabs = mutableSetOf<DiscoverTab>()
+
     init {
-        load(DiscoverTab.RECENT)
+        // The first open of a new process is one of the two moments the source is read.
+        startLoad(DiscoverTab.RECENT)
     }
 
     fun selectTab(tab: DiscoverTab) {
-        if (tab == _state.value.tab && _state.value.books.isNotEmpty()) return
-        load(tab)
+        when (tabAction(tab, _state.value.tab, _state.value.tabs[tab]?.books)) {
+            TabAction.NOTHING -> Unit
+            // The list is already here — showing it is a selection, not a read.
+            TabAction.SHOW_CACHED -> show(tab)
+            TabAction.FETCH -> startLoad(tab)
+        }
     }
 
     /**
@@ -103,12 +145,21 @@ class DiscoverViewModel(
      * A tap inside the two-second window is swallowed without a word — the list is
      * already being re-read or has just been, and an error message about tapping too
      * fast would be noise. [selectTab] itself is deliberately *not* throttled: it is a
-     * different request (another ranking), not a repeat of this one.
+     * different request (another ranking), and, once a tab has been read, no request at all.
      */
     fun refresh() {
         if (!refreshThrottle.tryAcquire()) return
-        load(_state.value.tab)
+        startLoad(_state.value.tab)
     }
+
+    /**
+     * The 重试 button on a failed body.
+     *
+     * Not paced, on purpose: a read that failed is not the read a previous tap started, and
+     * letting a window opened by that tap swallow this one would leave the failure on screen
+     * with nothing to do about it (see AGENTS.md on `RefreshThrottle`).
+     */
+    fun retry() = startLoad(_state.value.tab)
 
     /**
      * Called every time the screen comes back to the foreground.
@@ -128,36 +179,70 @@ class DiscoverViewModel(
         val sessionChanged = loggedIn != loadedWhileLoggedIn
         // The session can also expire server-side while the local cookie is still
         // present: then the flag did not move, but the last load needed a login.
-        val retryAfterLogin = loggedIn && _state.value.requiresLogin
+        val retryAfterLogin = loggedIn && _state.value.tabs[_state.value.tab]?.requiresLogin == true
         loadedWhileLoggedIn = loggedIn
-        if (sessionChanged || retryAfterLogin) load(_state.value.tab)
+        if (sessionChanged || retryAfterLogin) startLoad(_state.value.tab)
     }
 
-    private fun load(tab: DiscoverTab) {
+    /** Puts [tab] on screen with the list already held for it — no source read. */
+    private fun show(tab: DiscoverTab) {
+        _state.update { it.copy(tab = tab) }
+    }
+
+    private fun startLoad(tab: DiscoverTab) {
         loadedWhileLoggedIn = repository.isLoggedIn()
-        _state.update { it.copy(tab = tab, loading = true, error = null, requiresLogin = false) }
+        val alreadyReading = tab in loadingTabs
+        loadingTabs += tab
+        // The tab being read owns the screen from here: it is the selected one, and it shows
+        // its own spinner rather than the list it had (or the empty message it would have had)
+        // a moment ago. An unread tab therefore reads as loading from the instant it is asked
+        // for, which is also how a half-dragged-in page describes itself.
+        _state.update {
+            it.copy(
+                tab = tab,
+                tabs = it.tabs + (
+                    tab to it.tabState(tab).copy(loading = true, error = null, requiresLogin = false)
+                    ),
+            )
+        }
+        // A second read of the same tab would be one more page load against a site that
+        // throttles, and the answer is already on its way.
+        if (alreadyReading) return
         viewModelScope.launch {
-            runCatching {
-                when {
-                    tab == DiscoverTab.RECENT -> repository.recentUpdates()
-                    tab.fullOnly -> repository.catalog(fullOnly = true)
-                    tab.rankType != null -> repository.rank(tab.rankType)
-                    else -> emptyList()
-                }
-            }.onSuccess { books ->
-                _state.update { it.copy(books = books, loading = false, error = null) }
-            }.onFailure { error ->
-                val message = error.toUserMessage()
-                _state.update {
-                    it.copy(
-                        books = emptyList(),
+            val result = runCatching { fetch(tab) }
+            loadingTabs -= tab
+            _state.update { current ->
+                val previous = current.tabState(tab)
+                val failure = result.exceptionOrNull()
+                val tabState = if (failure == null) {
+                    previous.copy(
+                        books = result.getOrThrow(),
                         loading = false,
-                        error = message,
-                        requiresLogin = error is com.xempastissimo.lightnovelreader.data.network.HttpFailure.AuthRequired,
+                        error = null,
+                        requiresLogin = false,
+                    )
+                } else {
+                    // A failed read leaves nothing to show later, so the tab is retried the next
+                    // time it is selected rather than answering with a list that was never read.
+                    previous.copy(
+                        books = null,
+                        loading = false,
+                        error = failure.toUserMessage(),
+                        requiresLogin = failure is HttpFailure.AuthRequired,
                     )
                 }
+                // Written for the tab it belongs to whatever the pager is showing by now: a read
+                // that finished for a tab the user has since left belongs here, not on screen.
+                current.copy(tabs = current.tabs + (tab to tabState))
             }
         }
+    }
+
+    private suspend fun fetch(tab: DiscoverTab): List<Book> = when {
+        tab == DiscoverTab.RECENT -> repository.recentUpdates()
+        tab.fullOnly -> repository.catalog(fullOnly = true)
+        tab.rankType != null -> repository.rank(tab.rankType)
+        else -> emptyList()
     }
 
     companion object {
@@ -170,9 +255,9 @@ class DiscoverViewModel(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoverScreen(
-    onOpenBook: (Int) -> Unit,
+    onOpenBook: (Book) -> Unit,
     onOpenSearch: () -> Unit,
-    viewModel: DiscoverViewModel = viewModel(factory = DiscoverViewModel.factory(com.xempastissimo.lightnovelreader.ui.LocalAppContainer.current)),
+    viewModel: DiscoverViewModel = viewModel(factory = DiscoverViewModel.factory(LocalAppContainer.current)),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -185,6 +270,23 @@ fun DiscoverScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val tabs = DiscoverTab.entries
+    val pagerState = rememberPagerState(
+        initialPage = tabs.indexOf(state.tab).coerceAtLeast(0),
+        pageCount = { tabs.size },
+    )
+    val scope = rememberCoroutineScope()
+
+    // The finger owns the tab while it drags; the view model is told which page the pager came
+    // to rest on, and only that. A drag that turns back mid-way therefore costs no read at all,
+    // and a settled one reads at most the tab it landed on — nothing at all if this session has
+    // read it before (see `tabAction`).
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            tabs.getOrNull(page)?.let(viewModel::selectTab)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -200,98 +302,144 @@ fun DiscoverScreen(
             },
         )
 
+        // The pager's page rather than the view model's tab: the underline belongs on the page
+        // the reader is looking at, and that changes as soon as the drag passes the half-way
+        // point instead of waiting for the finger to let go.
+        val currentPage = pagerState.currentPage
+
         ScrollableTabRow(
-            selectedTabIndex = DiscoverTab.entries.indexOf(state.tab),
+            selectedTabIndex = currentPage,
             edgePadding = 12.dp,
         ) {
-            DiscoverTab.entries.forEach { tab ->
+            tabs.forEachIndexed { index, tab ->
                 Tab(
-                    selected = tab == state.tab,
-                    onClick = { viewModel.selectTab(tab) },
+                    selected = index == currentPage,
+                    onClick = {
+                        // The row answers the tap at once and the pager catches up, instead of
+                        // leaving the old tab underlined for the length of the scroll.
+                        viewModel.selectTab(tab)
+                        scope.launch { pagerState.animateScrollToPage(index) }
+                    },
                     text = { Text(tab.label) },
                 )
             }
         }
 
-        // Hoisted out of the branch below: a crossfade keeps the outgoing body
-        // composed while it fades, so that body must not assume the state it was
-        // built for is still current.
-        val errorMessage = state.error
-        val phase = when {
-            state.loading -> DiscoverPhase.LOADING
-            state.requiresLogin -> DiscoverPhase.LOGIN
-            errorMessage != null -> DiscoverPhase.ERROR
-            state.isEmpty -> DiscoverPhase.EMPTY
-            else -> DiscoverPhase.CONTENT
+        // This pager is what makes the gesture *follow the finger*: the page under the drag
+        // moves with it, and letting go either snaps back or lands on the neighbour. It also
+        // replaces the old hand-rolled swipe detector — the list still scrolls vertically (the
+        // pager only claims a drag once it is clearly horizontal, past touch slop), a claimed
+        // drag cancels the card's own tap so sliding past a row cannot open the book under the
+        // finger, and a flick moves at most one tab (`PagerDefaults`' snap distance) exactly
+        // like the detector did.
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            // Compose the neighbour before the finger arrives, so a drag uncovers text and
+            // covers instead of a blank page — the reader pre-composes its pages for the same
+            // reason.
+            beyondViewportPageCount = 1,
+            key = { index -> tabs[index] },
+        ) { page ->
+            val tab = tabs[page]
+            DiscoverTabBody(
+                tab = tab,
+                tabState = state.tabState(tab),
+                onOpenBook = onOpenBook,
+                onOpenSearch = onOpenSearch,
+                onRefresh = viewModel::refresh,
+                onRetry = viewModel::retry,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
+    }
+}
 
-        // Keyed on the tab as well as the phase so tapping a tab fades the old list
-        // out rather than swapping its rows in place. Each branch fills the space the
-        // crossfade owns, which keeps the fade from also animating the layout height.
-        StateCrossfade(
-            targetState = state.tab to phase,
-            label = "discover-body",
-            modifier = Modifier.weight(1f),
-        ) { (_, body) ->
-            when (body) {
-                DiscoverPhase.LOADING -> LoadingBox(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 80.dp),
-                    label = "正在从书源获取…",
-                )
+/**
+ * One tab's body: the spinner, a login wall, a failure, an empty list, or the ranking itself.
+ *
+ * Pulled out of [DiscoverScreen] because the pager holds one of these per page, including the
+ * neighbours.
+ */
+@Composable
+private fun DiscoverTabBody(
+    tab: DiscoverTab,
+    tabState: DiscoverTabState,
+    onOpenBook: (Book) -> Unit,
+    onOpenSearch: () -> Unit,
+    onRefresh: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val errorMessage = tabState.error
 
-                DiscoverPhase.LOGIN -> EmptyBox(
-                    title = "该榜单需要登录",
-                    hint = "该站点要求登录后才能浏览榜单与目录",
-                    actionLabel = "去搜索试试",
-                    onAction = onOpenSearch,
-                    modifier = Modifier.fillMaxSize(),
-                )
+    // Keyed on the phase alone: moving between tabs is the pager's slide now, and a crossfade
+    // on top of it would fade the very page the finger is dragging.
+    StateCrossfade(
+        targetState = tabState.phase,
+        label = "discover-body-${tab.name}",
+        modifier = modifier,
+    ) { phase ->
+        when (phase) {
+            DiscoverPhase.LOADING -> LoadingBox(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 80.dp),
+                label = "正在从书源获取…",
+            )
 
-                DiscoverPhase.ERROR -> EmptyBox(
-                    title = "加载失败",
-                    hint = buildString {
-                        append(errorMessage)
-                        // The most common cause on a fresh session is the site's browser
-                        // check, which the user can clear from the login flow.
-                        if (errorMessage != null &&
-                            (errorMessage.contains("浏览器") || errorMessage.contains("校验"))
-                        ) {
-                            append(" —— 请到「设置 → 账号 → 使用浏览器登录」完成校验后返回重试。")
-                        }
-                    },
-                    actionLabel = "重试",
-                    onAction = viewModel::refresh,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 80.dp),
-                )
+            DiscoverPhase.LOGIN -> EmptyBox(
+                title = "该榜单需要登录",
+                hint = "该站点要求登录后才能浏览榜单与目录",
+                actionLabel = "去搜索试试",
+                onAction = onOpenSearch,
+                modifier = Modifier.fillMaxSize(),
+            )
 
-                DiscoverPhase.EMPTY -> EmptyBox(
-                    title = "暂无内容",
-                    hint = "书源没有返回条目",
-                    actionLabel = "刷新",
-                    onAction = viewModel::refresh,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 80.dp),
-                )
-
-                DiscoverPhase.CONTENT -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(state.books, key = { it.bookId }) { book ->
-                        BookCard(
-                            book = book,
-                            onClick = { onOpenBook(book.bookId) },
-                            // Rows glide to their new positions when a refresh changes
-                            // the ranking instead of the whole list snapping.
-                            modifier = Modifier.animateItem(),
-                        )
+            DiscoverPhase.ERROR -> EmptyBox(
+                title = "加载失败",
+                hint = buildString {
+                    append(errorMessage)
+                    // The most common cause on a fresh session is the site's browser
+                    // check, which the user can clear from the login flow.
+                    if (errorMessage != null &&
+                        (errorMessage.contains("浏览器") || errorMessage.contains("校验"))
+                    ) {
+                        append(" —— 请到「设置 → 账号 → 使用浏览器登录」完成校验后返回重试。")
                     }
+                },
+                actionLabel = "重试",
+                onAction = onRetry,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 80.dp),
+            )
+
+            DiscoverPhase.EMPTY -> EmptyBox(
+                title = "暂无内容",
+                hint = "书源没有返回条目",
+                actionLabel = "刷新",
+                onAction = onRefresh,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 80.dp),
+            )
+
+            DiscoverPhase.CONTENT -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(tabState.books.orEmpty(), key = { it.bookId }) { book ->
+                    BookCard(
+                        book = book,
+                        onClick = { onOpenBook(book) },
+                        // Rows glide to their new positions when a refresh changes
+                        // the ranking instead of the whole list snapping.
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
         }

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -65,6 +66,7 @@ import com.xempastissimo.lightnovelreader.domain.model.ReadingProgress
 import com.xempastissimo.lightnovelreader.domain.model.Volume
 import com.xempastissimo.lightnovelreader.ui.AppContainer
 import com.xempastissimo.lightnovelreader.ui.AppViewModelFactory
+import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.component.CoverImage
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
@@ -81,6 +83,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class BookDetailUiState(
+    /**
+     * What the list this book was opened from already showed: title, cover, author, 文库.
+     *
+     * Drawn immediately so the screen is not a full-page spinner for as long as the source
+     * takes to answer; [detail] supersedes it the moment it arrives. Null after a process
+     * restart, where nothing was handed over and there is genuinely nothing to draw yet.
+     */
+    val summary: Book? = null,
     val detail: BookDetail? = null,
     val loading: Boolean = true,
     val error: String? = null,
@@ -102,6 +112,9 @@ data class BookDetailUiState(
     val packPhase: String? = null,
     val message: String? = null,
 ) {
+    /** The header the screen can draw right now: the source's own answer, or the list's copy. */
+    val book: Book? get() = detail?.book ?: summary
+
     val chapterCount: Int get() = detail?.chapters?.size ?: 0
 
     /** True when the pack on this device leaves part of the catalogue to be read online. */
@@ -126,19 +139,31 @@ class BookDetailViewModel(
     private var packJob: Job? = null
 
     init {
-        load()
+        // The list this book was just tapped in already showed its cover, title, author and
+        // 文库, so the header is drawn from that copy while the source is read. 简介, the tags
+        // and the chapter tree arrive later; none of them is needed to know what book this is.
         _state.update {
             it.copy(
+                summary = repository.summary(bookId),
                 packSupported = repository.supportsPackDownload,
                 pack = repository.downloadedBook(bookId),
             )
         }
+        load()
         // The pack directory is read from disk rather than trusted to be in memory: this
         // screen can be the first thing opened after a cold start, and another screen may
         // have downloaded (or deleted) a pack while this one sat on the back stack.
         viewModelScope.launch {
             runCatching { repository.refreshPacks() }
-            _state.update { it.copy(pack = repository.downloadedBook(bookId)) }
+            val pack = repository.downloadedBook(bookId)
+            _state.update {
+                // A downloaded book carries the catalogue it was matched against, and that is
+                // a real answer for it: opening one offline must not sit behind a
+                // browser-engine timeout first. Only a stand-in — never a replacement for an
+                // answer that has already arrived from the source.
+                val offlineToc = pack?.tocDetail()?.takeIf { detail -> detail.chapters.isNotEmpty() }
+                it.copy(pack = pack, detail = it.detail ?: offlineToc)
+            }
         }
         viewModelScope.launch {
             shelfRepository.entries.collect { entries ->
@@ -194,6 +219,15 @@ class BookDetailViewModel(
     }
 
     /**
+     * The 重试 button on a failed body (full-screen or inline).
+     *
+     * Not paced, on purpose: the read that failed is not the read a previous tap started, and
+     * a window opened by that tap swallowing this one would leave the failure on screen with
+     * nothing to do about it (see AGENTS.md on `RefreshThrottle`).
+     */
+    fun retry() = load(forceRefresh = true)
+
+    /**
      * Favourite toggle.
      *
      * Favouriting means "put this on the site's bookshelf", because that bookshelf is
@@ -206,7 +240,9 @@ class BookDetailViewModel(
      * shelf has nothing to do with either.
      */
     fun toggleShelf() {
-        val detail = _state.value.detail ?: return
+        // The header may still be the list's copy: favouriting is about *which book* this is,
+        // not about whether its catalogue has arrived, so the star works from the first frame.
+        val book = _state.value.book ?: return
         if (!source.isLoggedIn()) {
             _state.update { it.copy(message = "请先登录，才能收藏到站点在线书架") }
             return
@@ -216,7 +252,7 @@ class BookDetailViewModel(
             if (wasOnShelf) {
                 shelfRepository.markOnline(bookId, online = false)
             } else {
-                shelfRepository.add(detail.book)
+                shelfRepository.add(book)
             }
             _state.update { it.copy(message = mirrorToOnlineShelf(remove = wasOnShelf)) }
         }
@@ -373,22 +409,24 @@ class BookDetailViewModel(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The book's page, as the app wires it up: the view model, and the snackbar that reports what
+ * it did. Everything it *renders* lives in [BookDetailContent], which is stateless exactly so
+ * that it can be previewed — including the states this screen exists to get right, a header
+ * drawn from a list's copy while the catalogue is still being read, and a failure that keeps
+ * what is known instead of replacing the page with an error.
+ */
 @Composable
 fun BookDetailScreen(
     bookId: Int,
     onBack: () -> Unit,
     onRead: (Int) -> Unit,
     viewModel: BookDetailViewModel = viewModel(
-        factory = BookDetailViewModel.factory(
-            com.xempastissimo.lightnovelreader.ui.LocalAppContainer.current,
-            bookId,
-        ),
+        factory = BookDetailViewModel.factory(LocalAppContainer.current, bookId),
     ),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var confirmDeletePack by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -398,89 +436,167 @@ fun BookDetailScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = state.detail?.book?.title ?: "书籍详情",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+        BookDetailContent(
+            state = state,
+            actions = BookDetailActions(
+                onBack = onBack,
+                onRefresh = viewModel::refresh,
+                onRetry = viewModel::retry,
+                onToggleShelf = viewModel::toggleShelf,
+                onRead = onRead,
+                onDownload = viewModel::downloadAll,
+                onCancelDownload = viewModel::cancelDownload,
+                onDownloadPack = viewModel::downloadPack,
+                onCancelPackDownload = viewModel::cancelPackDownload,
+                onDeletePack = viewModel::deletePack,
+            ),
+        )
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp),
+        )
+    }
+}
+
+/**
+ * Everything the detail screen can do, in one value.
+ *
+ * Bundled with a default for each entry so the body takes two parameters instead of ten, and
+ * so a preview can render any state by supplying only the state: `@Preview` cannot reach a
+ * view model, which is the whole reason this half exists.
+ */
+data class BookDetailActions(
+    val onBack: () -> Unit = {},
+    val onRefresh: () -> Unit = {},
+    val onRetry: () -> Unit = {},
+    val onToggleShelf: () -> Unit = {},
+    val onRead: (Int) -> Unit = {},
+    val onDownload: () -> Unit = {},
+    val onCancelDownload: () -> Unit = {},
+    val onDownloadPack: () -> Unit = {},
+    val onCancelPackDownload: () -> Unit = {},
+    val onDeletePack: () -> Unit = {},
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BookDetailContent(
+    state: BookDetailUiState,
+    actions: BookDetailActions = BookDetailActions(),
+) {
+    // Deleting a download is deleting text the user waited for, so it asks first — and
+    // says what it does *not* touch, which is the part that is easy to fear.
+    var confirmDeletePack by remember { mutableStateOf(false) }
+
+    val phase = when {
+        // Any header at all — the site's own answer or the list's copy — is enough to open
+        // with: 简介 and the catalogue fill in below it rather than replacing it with a
+        // spinner. Only a page with nothing to draw falls back to the full-screen states.
+        state.book != null -> DetailPhase.CONTENT
+        state.error != null -> DetailPhase.ERROR
+        else -> DetailPhase.LOADING
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = {
+                Text(
+                    text = state.book?.title ?: "书籍详情",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            navigationIcon = {
+                IconButton(onClick = actions.onBack) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+                }
+            },
+            actions = {
+                IconButton(onClick = actions.onRefresh) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                }
+                IconButton(onClick = actions.onToggleShelf) {
+                    if (state.onShelf) {
+                        Icon(Icons.Filled.Star, contentDescription = "已在书架", tint = MaterialTheme.colorScheme.tertiary)
+                    } else {
+                        Icon(Icons.Outlined.Star, contentDescription = "加入书架")
                     }
-                },
-                actions = {
-                    IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
-                    }
-                    IconButton(onClick = viewModel::toggleShelf) {
-                        if (state.onShelf) {
-                            Icon(Icons.Filled.Star, contentDescription = "已在书架", tint = MaterialTheme.colorScheme.tertiary)
-                        } else {
-                            Icon(Icons.Outlined.Star, contentDescription = "加入书架")
-                        }
-                    }
-                },
-            )
+                }
+            },
+        )
 
-            val phase = when {
-                state.loading -> DetailPhase.LOADING
-                state.error != null -> DetailPhase.ERROR
-                else -> DetailPhase.CONTENT
-            }
+        // The spinner hands over to the catalog with a fade, and the catalog
+        // itself only re-arranges where a row actually moved.
+        StateCrossfade(
+            targetState = phase,
+            label = "detail-body",
+            modifier = Modifier.weight(1f),
+        ) { body ->
+            when (body) {
+                DetailPhase.LOADING -> LoadingBox(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 80.dp),
+                    label = "正在获取目录…",
+                )
 
-            // The spinner hands over to the catalog with a fade, and the catalog
-            // itself only re-arranges where a row actually moved.
-            StateCrossfade(
-                targetState = phase,
-                label = "detail-body",
-                modifier = Modifier.weight(1f),
-            ) { body ->
-                when (body) {
-                    DetailPhase.LOADING -> LoadingBox(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 80.dp),
-                        label = "正在获取目录…",
-                    )
+                DetailPhase.ERROR -> EmptyBox(
+                    title = "加载失败",
+                    hint = state.error,
+                    actionLabel = "重试",
+                    onAction = actions.onRetry,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 80.dp),
+                )
 
-                    DetailPhase.ERROR -> EmptyBox(
-                        title = "加载失败",
-                        hint = state.error,
-                        actionLabel = "重试",
-                        onAction = viewModel::refresh,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 80.dp),
-                    )
-
-                    DetailPhase.CONTENT -> {
-                        val detail = state.detail
-                        if (detail != null) {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(bottom = 32.dp),
-                            ) {
-                                item { DetailHeader(detail = detail) }
+                DetailPhase.CONTENT -> {
+                    val book = state.book
+                    val detail = state.detail
+                    if (book != null) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 32.dp),
+                        ) {
+                            item { DetailHeader(book = book) }
+                            item {
+                                DetailActions(
+                                    state = state,
+                                    chapterCount = state.chapterCount,
+                                    onRead = {
+                                        val target = state.progress?.chapterId
+                                            ?: detail?.chapters?.firstOrNull()?.chapterId
+                                        if (target != null) actions.onRead(target)
+                                    },
+                                    onDownload = actions.onDownload,
+                                    onCancelDownload = actions.onCancelDownload,
+                                    onDownloadPack = actions.onDownloadPack,
+                                    onCancelPackDownload = actions.onCancelPackDownload,
+                                    onDeletePack = { confirmDeletePack = true },
+                                )
+                            }
+                            // What the screen is still waiting for, or what it could not get,
+                            // said *under* the header — the cover, the title and whatever
+                            // catalogue was already known stay where the user can read them.
+                            if (state.loading) {
                                 item {
-                                    DetailActions(
-                                        state = state,
-                                        chapterCount = detail.chapters.size,
-                                        onRead = {
-                                            val target = state.progress?.chapterId
-                                                ?: detail.chapters.firstOrNull()?.chapterId
-                                            if (target != null) onRead(target)
-                                        },
-                                        onDownload = viewModel::downloadAll,
-                                        onCancelDownload = viewModel::cancelDownload,
-                                        onDownloadPack = viewModel::downloadPack,
-                                        onCancelPackDownload = viewModel::cancelPackDownload,
-                                        onDeletePack = { confirmDeletePack = true },
+                                    DetailStatusRow(
+                                        text = if (detail == null) "正在获取目录…" else "正在重新获取…",
+                                        busy = true,
                                     )
                                 }
+                            } else if (state.error != null) {
+                                item {
+                                    DetailStatusRow(
+                                        text = "加载失败：${state.error}",
+                                        onRetry = actions.onRetry,
+                                    )
+                                }
+                            }
+                            if (detail != null) {
                                 if (detail.tags.isNotEmpty()) {
                                     item {
                                         Text(
@@ -517,7 +633,7 @@ fun BookDetailScreen(
                                                 chapter = chapter,
                                                 current = chapter.chapterId == state.progress?.chapterId,
                                                 cached = state.cachedChapterIds.contains(chapter.chapterId),
-                                                onClick = { onRead(chapter.chapterId) },
+                                                onClick = { actions.onRead(chapter.chapterId) },
                                                 modifier = Modifier.animateItem(),
                                             )
                                         }
@@ -529,17 +645,8 @@ fun BookDetailScreen(
                 }
             }
         }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(16.dp),
-        )
     }
 
-    // Deleting a download is deleting text the user waited for, so it asks first — and
-    // says what it does *not* touch, which is the part that is easy to fear.
     if (confirmDeletePack) {
         AlertDialog(
             onDismissRequest = { confirmDeletePack = false },
@@ -551,7 +658,7 @@ fun BookDetailScreen(
                 TextButton(
                     onClick = {
                         confirmDeletePack = false
-                        viewModel.deletePack()
+                        actions.onDeletePack()
                     },
                 ) {
                     Text("删除")
@@ -564,12 +671,48 @@ fun BookDetailScreen(
     }
 }
 
+/**
+ * One line under 开始阅读/缓存全本: what the screen is waiting for, or why it could not finish.
+ *
+ * Inline rather than a whole-screen state because the header — and a catalogue that came from
+ * a downloaded pack — are already readable, and swapping them for an error would throw away
+ * the only thing the user can still use.
+ */
 @Composable
-private fun DetailHeader(detail: BookDetail) {
+private fun DetailStatusRow(
+    text: String,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+    onRetry: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (onRetry != null) {
+            TextButton(onClick = onRetry) { Text("重试") }
+        }
+    }
+}
+
+@Composable
+private fun DetailHeader(book: Book) {
     Row(modifier = Modifier.padding(16.dp)) {
         CoverImage(
-            url = detail.book.coverUrl,
-            title = detail.book.title,
+            url = book.coverUrl,
+            title = book.title,
             modifier = Modifier.size(width = 96.dp, height = 132.dp),
             cornerRadius = 8,
         )
@@ -579,38 +722,38 @@ private fun DetailHeader(detail: BookDetail) {
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(text = detail.book.title, style = MaterialTheme.typography.titleMedium)
-            if (detail.book.author.isNotBlank()) {
+            Text(text = book.title, style = MaterialTheme.typography.titleMedium)
+            if (book.author.isNotBlank()) {
                 Text(
-                    text = "作者：${detail.book.author}",
+                    text = "作者：${book.author}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (detail.book.category.isNotBlank()) {
+            if (book.category.isNotBlank()) {
                 Text(
-                    text = "文库：${detail.book.category}",
+                    text = "文库：${book.category}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (detail.book.status.isNotBlank()) {
+            if (book.status.isNotBlank()) {
                 Text(
-                    text = "状态：${detail.book.status}",
+                    text = "状态：${book.status}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (detail.book.updatedAt.isNotBlank()) {
+            if (book.updatedAt.isNotBlank()) {
                 Text(
-                    text = "更新：${detail.book.updatedAt}",
+                    text = "更新：${book.updatedAt}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (detail.book.latestChapter.isNotBlank()) {
+            if (book.latestChapter.isNotBlank()) {
                 Text(
-                    text = "最新：${detail.book.latestChapter}",
+                    text = "最新：${book.latestChapter}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     maxLines = 2,
@@ -888,7 +1031,23 @@ private val sampleDetail = BookDetail(
 @Composable
 private fun DetailHeaderPreview() {
     LightNovelReaderTheme {
-        DetailHeader(detail = sampleDetail)
+        DetailHeader(book = sampleDetail.book)
+    }
+}
+
+@Preview(name = "状态行 · 正在获取目录", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailStatusBusyPreview() {
+    LightNovelReaderTheme {
+        DetailStatusRow(text = "正在获取目录…", busy = true)
+    }
+}
+
+@Preview(name = "状态行 · 加载失败", showBackground = true, widthDp = 360)
+@Composable
+private fun DetailStatusFailedPreview() {
+    LightNovelReaderTheme {
+        DetailStatusRow(text = "加载失败：网络请求失败", onRetry = {})
     }
 }
 

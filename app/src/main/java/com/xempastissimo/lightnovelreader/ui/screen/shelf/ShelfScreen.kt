@@ -503,7 +503,7 @@ class ShelfViewModel(
  */
 @Composable
 fun ShelfScreen(
-    onOpenBook: (Int) -> Unit,
+    onOpenBook: (Book) -> Unit,
     onContinueReading: (Int, Int) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenLogin: () -> Unit,

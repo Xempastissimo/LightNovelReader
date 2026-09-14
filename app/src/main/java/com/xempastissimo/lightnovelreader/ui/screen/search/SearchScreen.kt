@@ -125,7 +125,7 @@ class SearchViewModel(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    onOpenBook: (Int) -> Unit,
+    onOpenBook: (Book) -> Unit,
     viewModel: SearchViewModel = viewModel(
         factory = SearchViewModel.factory(com.xempastissimo.lightnovelreader.ui.LocalAppContainer.current),
     ),
@@ -220,7 +220,7 @@ fun SearchScreen(
                     items(state.results, key = { it.bookId }) { book ->
                         BookRow(
                             book = book,
-                            onClick = { onOpenBook(book.bookId) },
+                            onClick = { onOpenBook(book) },
                             // A second search re-ranks the list; the rows that stayed
                             // put glide to their new place instead of jumping.
                             modifier = Modifier.animateItem(),

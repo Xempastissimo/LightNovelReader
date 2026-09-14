@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.xempastissimo.lightnovelreader.data.repo.formatBytes
+import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.ShelfEntry
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
@@ -76,7 +77,7 @@ data class ShelfActions(
     val onRemove: (ShelfEntry) -> Unit = {},
     val onDeleteOffline: (ShelfEntry) -> Unit = {},
     val onDeleteDownloaded: (ShelfEntry) -> Unit = {},
-    val onOpenBook: (Int) -> Unit = {},
+    val onOpenBook: (Book) -> Unit = {},
     val onContinueReading: (Int, Int) -> Unit = { _, _ -> },
     val onOpenSearch: () -> Unit = {},
     val onOpenLogin: () -> Unit = {},
@@ -314,7 +315,7 @@ fun ShelfContent(
                                         if (chapterId != null && chapterId > 0) {
                                             actions.onContinueReading(bookId, chapterId)
                                         } else {
-                                            actions.onOpenBook(bookId)
+                                            actions.onOpenBook(entry.book)
                                         }
                                     }
                                 },
@@ -346,7 +347,7 @@ fun ShelfContent(
                                     onDismiss = { menuBookId = null },
                                     onOpenDetail = {
                                         menuBookId = null
-                                        actions.onOpenBook(bookId)
+                                        actions.onOpenBook(entry.book)
                                     },
                                     // The tabs' deletes reach different things, so the menu
                                     // has to name the one it will do.

@@ -7,6 +7,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -21,13 +22,16 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -56,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -126,6 +131,15 @@ data class ReaderUiState(
     val error: String? = null,
     val requiresLogin: Boolean = false,
     val settings: ReaderSettings = ReaderSettings(),
+    /**
+     * Whether [settings] are the user's stored ones rather than the stock defaults.
+     *
+     * DataStore answers asynchronously, so for the first frame or two the state still holds
+     * `ReaderSettings()` — whose 米黄 theme is *not* what most readers of a night theme see.
+     * The screen needs to know the difference to avoid painting that stand-in (see
+     * `ReaderScreen`).
+     */
+    val settingsLoaded: Boolean = false,
     val showMenu: Boolean = true,
 )
 
@@ -167,7 +181,7 @@ class ReaderViewModel(
                     } else {
                         current.pages
                     }
-                    current.copy(settings = settings, pages = repaginated)
+                    current.copy(settings = settings, settingsLoaded = true, pages = repaginated)
                 }
             }
         }
@@ -459,7 +473,7 @@ class ReaderViewModel(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ReaderScreen(
     bookId: Int,
@@ -514,20 +528,9 @@ fun ReaderScreen(
         val previousStatusBars = controller?.isAppearanceLightStatusBars
         val previousNavigationBars = controller?.isAppearanceLightNavigationBars
 
-        // Reading happens on the page, not on the status bar: while this screen is up the
-        // system's time/battery row is hidden, so the page — or the reader's own bar —
-        // reaches the top edge of the display.
-        //
-        // Only the status bar goes. The navigation bar stays because hiding it turns
-        // edge-to-edge into full immersive mode, where the first swipe is spent bringing it
-        // back and the keyboard needs either bar temporarily restored. `statusBars()`
-        // rather than `systemBars()` is what keeps the two apart.
-        //
-        // The inset is part of the same mechanism: with the status bar gone the top window
-        // inset is zero, so the reader's own top bar slides up into the space by itself.
-        // Swiping the hidden bar in still works, which is what the behaviour below buys.
+        // Swiping the status row in while it is hidden still works, which is what this buys;
+        // whether it is hidden at any moment is the overlay's business (see below).
         controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        controller?.hide(WindowInsetsCompat.Type.statusBars())
 
         // Everything is put back on the way out, whatever way the reader was left — the
         // on-screen 返回 button, a system back gesture, or the screen being torn down.
@@ -540,38 +543,99 @@ fun ReaderScreen(
         }
     }
 
+    // The system's status row belongs to the overlay, not to the reader: it comes up with the
+    // bars — which are the colour the user picked and are what the clock is then drawn on —
+    // and goes when they go, handing the whole display to the page. Reading happens on the
+    // page, but a reader who has asked for the controls has asked for the status row too.
+    //
+    // Keyed on `showMenu` rather than on the bars themselves so the first frame stays still:
+    // the row is already on screen when the reader opens, and hiding it for the frame or two
+    // before the stored settings land, only to bring it back, would be a blink.
+    //
+    // Only the status row goes. The navigation bar stays because hiding it turns edge-to-edge
+    // into full immersive mode, where the first swipe is spent bringing it back and the
+    // keyboard needs either bar temporarily restored. `statusBars()` rather than
+    // `systemBars()` is what keeps the two apart.
+    LaunchedEffect(insetsController, state.showMenu) {
+        val controller = insetsController ?: return@LaunchedEffect
+        if (state.showMenu) {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
     // Picking a reading background is a tap the user expects to see land, so the
     // paper colour eases into the new theme instead of snapping. The surface is
     // painted from the draw phase — `drawBehind` reads the animated state, so the
     // fade redraws the background without recomposing the pager sitting on it. The
     // text colour has to follow along, otherwise dark-on-paper would stay dark for
     // the length of the fade after switching to a night theme.
+    //
+    // The *first* theme is the exception, and `key` is what makes it one. It arrives from
+    // DataStore a frame or two after the screen does, and until it lands the state still
+    // holds the stock 米黄: painting that stand-in is what turned opening the reader in dark
+    // mode into a black → near-white → night flash — the page appeared on cream and then
+    // eased across to the background the user had actually chosen. Before the stored
+    // settings are known the surface is therefore the colour the reader was opened over (the
+    // app's own background), and keying on "the settings are known" throws the animation
+    // state away the moment it flips, so the first real theme starts *at* its own colour
+    // instead of animating into it. Only a theme picked after that is worth watching.
     val palette = readerPalette(state.settings.theme)
-    val background = animateColorAsState(
-        targetValue = palette.background,
-        animationSpec = tween(durationMillis = Motion.SLOW_MILLIS),
-        label = "readerBackground",
-    )
-    val bodyColor = animateColorAsState(
-        targetValue = palette.text,
-        animationSpec = tween(durationMillis = Motion.SLOW_MILLIS),
-        label = "readerText",
-    )
+    val settingsLoaded = state.settingsLoaded
+
+    val background = key(settingsLoaded) {
+        animateColorAsState(
+            targetValue = if (settingsLoaded) palette.background else MaterialTheme.colorScheme.background,
+            animationSpec = tween(durationMillis = Motion.SLOW_MILLIS),
+            label = "readerBackground",
+        )
+    }
+    val bodyColor = key(settingsLoaded) {
+        animateColorAsState(
+            targetValue = palette.text,
+            animationSpec = tween(durationMillis = Motion.SLOW_MILLIS),
+            label = "readerText",
+        )
+    }
     val pagePalette = palette.copy(text = bodyColor.value)
     val barPalette = readerBarPalette(state.settings, pagePalette)
+
+    // The bars are the user's own colour, and DataStore only answers a frame or two after the
+    // screen appears. Painted from the defaults in that gap they show the stock blue first and
+    // then jump to the colour the user mixed — a flash in the one place the eye is already
+    // looking, because the overlay is what slides in as the reader opens. So the overlay waits
+    // for the settings; what it enters with is then the only colour it ever shows. (The page
+    // itself is held back the same way, for the same reason; see below.)
+    val showBars = state.showMenu && state.settingsLoaded
+
+    // The status bar the reader hides is only *gone* a few hundred ms after it is asked to go,
+    // so its inset is a poor thing to lay the bar out against: taken as it comes, the title
+    // would sit under the status row and then jump 138 px up the moment the inset collapses —
+    // a second movement, right as the screen settles. The row's height is therefore read from
+    // the inset that ignores whether it is currently shown, and applied whenever the overlay
+    // is up: the title makes room for the clock as the bars arrive and takes the space back
+    // when they leave, in one glide, whichever way the system's own animation is running.
+    val density = LocalDensity.current
+    val statusBarHeight = WindowInsets.statusBarsIgnoringVisibility.getTop(density)
+    val barInset by animateDpAsState(
+        targetValue = with(density) { (if (state.showMenu) statusBarHeight else 0).toDp() },
+        animationSpec = tween(durationMillis = Motion.SLOW_MILLIS),
+        label = "readerBarInset",
+    )
 
     // The glyphs have to contrast with whatever is actually behind them: the bars while
     // the overlay is up, the page itself while it is hidden. Both are user-picked
     // colours now, so neither can be assumed any more.
     val barPrefersDarkInk = barPalette.container.prefersDarkInk()
     val pagePrefersDarkInk = pagePalette.background.prefersDarkInk()
-    LaunchedEffect(insetsController, state.showMenu, barPrefersDarkInk, pagePrefersDarkInk) {
+    LaunchedEffect(insetsController, showBars, barPrefersDarkInk, pagePrefersDarkInk) {
         val controller = insetsController ?: return@LaunchedEffect
         // Wait for the bars to finish leaving before handing the status area back to
         // the page: flipping the icons while the bar is still on its way out would put
         // the wrong glyphs on it for the length of the exit.
-        if (!state.showMenu) delay(Motion.EXIT_MILLIS.toLong())
-        val darkInk = if (state.showMenu) barPrefersDarkInk else pagePrefersDarkInk
+        if (!showBars) delay(Motion.EXIT_MILLIS.toLong())
+        val darkInk = if (showBars) barPrefersDarkInk else pagePrefersDarkInk
         controller.isAppearanceLightStatusBars = darkInk
         controller.isAppearanceLightNavigationBars = darkInk
     }
@@ -781,7 +845,7 @@ fun ReaderScreen(
         // The bars leave faster than they arrive: an exit the eye is not meant to
         // follow, an entrance it is.
         AnimatedVisibility(
-            visible = state.showMenu,
+            visible = showBars,
             enter = slideInVertically(
                 animationSpec = tween(Motion.ENTER_MILLIS, easing = LinearOutSlowInEasing),
             ) { height -> -height } + fadeIn(animationSpec = tween(Motion.ENTER_MILLIS)),
@@ -822,11 +886,15 @@ fun ReaderScreen(
                     navigationIconContentColor = barPalette.content,
                     actionIconContentColor = barPalette.content,
                 ),
+                // The status row is on its way out for the whole life of this screen, so the
+                // bar is laid out against an inset that is already animating away (see above)
+                // rather than against the raw one, which would snap this content up mid-entry.
+                windowInsets = WindowInsets(top = with(density) { barInset.roundToPx() }),
             )
         }
 
         AnimatedVisibility(
-            visible = state.showMenu,
+            visible = showBars,
             enter = slideInVertically(
                 animationSpec = tween(Motion.ENTER_MILLIS, easing = LinearOutSlowInEasing),
             ) { height -> height } + fadeIn(animationSpec = tween(Motion.ENTER_MILLIS)),
