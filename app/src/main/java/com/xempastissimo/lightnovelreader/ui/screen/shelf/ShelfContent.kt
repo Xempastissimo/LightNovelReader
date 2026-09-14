@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -38,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,6 +54,7 @@ import com.xempastissimo.lightnovelreader.domain.model.ShelfEntry
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.ShelfRow
+import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
 
 /** Which of the shelf's mutually exclusive bodies is on show. */
@@ -272,94 +274,89 @@ fun ShelfContent(
                         .padding(top = 60.dp),
                 )
 
-                ShelfPhase.CONTENT -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                ) {
-                    items(state.entries, key = { it.book.bookId }) { entry ->
-                        val bookId = entry.book.bookId
-                        val selected = bookId in state.selection
-                        val cachedCopy = state.offline[bookId]
-                        val download = state.downloads[bookId]
-                        Box {
-                            ShelfRow(
-                                book = entry.book,
-                                progressText = entry.progress?.let { progress ->
-                                    "读到 第 ${progress.chapterIndex + 1} 章" +
-                                        if (entry.book.latestChapter.isNotBlank()) {
-                                            " · 最新：${entry.book.latestChapter}"
-                                        } else {
-                                            ""
-                                        }
-                                },
-                                progressFraction = null,
-                                // Read from the directory listing on every tab, not from the
-                                // row's own record: a chapter cached by reading it online
-                                // never reaches that record, and the badge would stay off.
-                                offline = download != null || cachedCopy != null,
-                                offlineText = when {
-                                    download != null ->
-                                        "已下载整本 · 覆盖 ${download.covered}/${download.tocTotal} 章" +
-                                            " · ${formatBytes(download.bytes)}"
+                ShelfPhase.CONTENT -> key(state.entries.hashCode()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 24.dp),
+                    ) {
+                        itemsIndexed(state.entries, key = { _, entry -> entry.book.bookId }) { index, entry ->
+                            val bookId = entry.book.bookId
+                            val selected = bookId in state.selection
+                            val cachedCopy = state.offline[bookId]
+                            val download = state.downloads[bookId]
+                            StaggeredEntrance(index = index) {
+                                Box {
+                                    ShelfRow(
+                                        book = entry.book,
+                                        progressText = entry.progress?.let { progress ->
+                                            "读到 第 ${progress.chapterIndex + 1} 章" +
+                                                if (entry.book.latestChapter.isNotBlank()) {
+                                                    " · 最新：${entry.book.latestChapter}"
+                                                } else {
+                                                    ""
+                                                }
+                                        },
+                                        progressFraction = null,
+                                        offline = download != null || cachedCopy != null,
+                                        offlineText = when {
+                                            download != null ->
+                                                "已下载整本 · 覆盖 ${download.covered}/${download.tocTotal} 章" +
+                                                    " · ${formatBytes(download.bytes)}"
 
-                                    cachedCopy != null ->
-                                        "已缓存 ${cachedCopy.chapterCount} 章 · ${formatBytes(cachedCopy.sizeBytes)}"
+                                            cachedCopy != null ->
+                                                "已缓存 ${cachedCopy.chapterCount} 章 · ${formatBytes(cachedCopy.sizeBytes)}"
 
-                                    else -> null
-                                },
-                                onClick = {
-                                    if (state.selecting) {
-                                        actions.onToggleSelection(bookId)
-                                    } else {
-                                        val chapterId = entry.progress?.chapterId
-                                        if (chapterId != null && chapterId > 0) {
-                                            actions.onContinueReading(bookId, chapterId)
-                                        } else {
-                                            actions.onOpenBook(entry.book)
-                                        }
+                                            else -> null
+                                        },
+                                        onClick = {
+                                            if (state.selecting) {
+                                                actions.onToggleSelection(bookId)
+                                            } else {
+                                                val chapterId = entry.progress?.chapterId
+                                                if (chapterId != null && chapterId > 0) {
+                                                    actions.onContinueReading(bookId, chapterId)
+                                                } else {
+                                                    actions.onOpenBook(entry.book)
+                                                }
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (state.selecting) actions.onToggleSelection(bookId)
+                                            else menuBookId = bookId
+                                        },
+                                        modifier = Modifier.animateItem(),
+                                        trailing = {
+                                            if (state.selecting) {
+                                                Checkbox(checked = selected, onCheckedChange = null)
+                                            } else {
+                                                IconButton(onClick = { requestDelete(entry) }) {
+                                                    Icon(
+                                                        Icons.Filled.Delete,
+                                                        contentDescription = deleteLabelFor(state.tab),
+                                                    )
+                                                }
+                                            }
+                                        },
+                                    )
+                                    if (!state.selecting) {
+                                        RowMenu(
+                                            expanded = menuBookId == bookId,
+                                            onDismiss = { menuBookId = null },
+                                            onOpenDetail = {
+                                                menuBookId = null
+                                                actions.onOpenBook(entry.book)
+                                            },
+                                            deleteLabel = deleteLabelFor(state.tab),
+                                            onDelete = {
+                                                menuBookId = null
+                                                requestDelete(entry)
+                                            },
+                                        )
                                     }
-                                },
-                                // Long press still opens the row's menu while browsing;
-                                // inside multi-select it is just another way to tick a row.
-                                onLongClick = {
-                                    if (state.selecting) actions.onToggleSelection(bookId)
-                                    else menuBookId = bookId
-                                },
-                                // Removing a book now fades the row out and lets the rows
-                                // below it close the gap, instead of the list jumping.
-                                modifier = Modifier.animateItem(),
-                                trailing = {
-                                    if (state.selecting) {
-                                        Checkbox(checked = selected, onCheckedChange = null)
-                                    } else {
-                                        IconButton(onClick = { requestDelete(entry) }) {
-                                            Icon(
-                                                Icons.Filled.Delete,
-                                                contentDescription = deleteLabelFor(state.tab),
-                                            )
-                                        }
-                                    }
-                                },
-                            )
-                            if (!state.selecting) {
-                                RowMenu(
-                                    expanded = menuBookId == bookId,
-                                    onDismiss = { menuBookId = null },
-                                    onOpenDetail = {
-                                        menuBookId = null
-                                        actions.onOpenBook(entry.book)
-                                    },
-                                    // The tabs' deletes reach different things, so the menu
-                                    // has to name the one it will do.
-                                    deleteLabel = deleteLabelFor(state.tab),
-                                    onDelete = {
-                                        menuBookId = null
-                                        requestDelete(entry)
-                                    },
-                                )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             }
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }

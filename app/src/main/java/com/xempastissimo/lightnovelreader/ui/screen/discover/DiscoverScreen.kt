@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -46,6 +47,7 @@ import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.component.BookCard
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
+import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -427,19 +429,21 @@ private fun DiscoverTabBody(
                     .padding(top = 80.dp),
             )
 
-            DiscoverPhase.CONTENT -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(tabState.books.orEmpty(), key = { it.bookId }) { book ->
-                    BookCard(
-                        book = book,
-                        onClick = { onOpenBook(book) },
-                        // Rows glide to their new positions when a refresh changes
-                        // the ranking instead of the whole list snapping.
-                        modifier = Modifier.animateItem(),
-                    )
+            DiscoverPhase.CONTENT -> key(tabState.books.orEmpty().hashCode()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    itemsIndexed(tabState.books.orEmpty(), key = { _, book -> book.bookId }) { index, book ->
+                        StaggeredEntrance(index = index) {
+                            BookCard(
+                                book = book,
+                                onClick = { onOpenBook(book) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -1,10 +1,13 @@
 package com.xempastissimo.lightnovelreader.ui.component
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.MaterialTheme
@@ -16,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
@@ -145,4 +149,47 @@ fun <T> StateCrossfade(
         label = label,
         content = content,
     )
+}
+
+private const val STAGGER_DELAY_MILLIS = 40
+private const val STAGGER_CAP_MILLIS = 400
+private const val STAGGER_SLIDE_DP = 24
+
+/**
+ * Wraps [content] in an entrance animation: fade in + slide up from below.
+ *
+ * The delay before each item starts animating is [index] × 40 ms, capped at 400 ms so
+ * long lists do not leave the tail waiting for ever.  The effect is driven by
+ * [AnimatedVisibility], which plays once on initial composition and does not re-trigger
+ * when the item merely scrolls in and out of the viewport.
+ *
+ * Pair this with a [LazyColumn][androidx.compose.foundation.lazy.LazyColumn] key that
+ * changes on each data refresh (e.g. a phase + data hash) so the list is recreated and
+ * the entrance animation replays.
+ */
+@Composable
+fun StaggeredEntrance(
+    index: Int,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val delay = min(index * STAGGER_DELAY_MILLIS, STAGGER_CAP_MILLIS)
+    AnimatedVisibility(
+        visible = true,
+        enter = fadeIn(
+            animationSpec = tween(
+                durationMillis = Motion.ENTER_MILLIS,
+                delayMillis = delay,
+            ),
+        ) + slideInVertically(
+            initialOffsetY = { it / STAGGER_SLIDE_DP },
+            animationSpec = tween(
+                durationMillis = Motion.ENTER_MILLIS,
+                delayMillis = delay,
+            ),
+        ),
+        modifier = modifier,
+    ) {
+        content()
+    }
 }
