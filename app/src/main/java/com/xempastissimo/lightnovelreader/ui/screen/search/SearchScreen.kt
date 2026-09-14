@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,6 +46,7 @@ import com.xempastissimo.lightnovelreader.ui.AppViewModelFactory
 import com.xempastissimo.lightnovelreader.ui.component.BookRow
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
+import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -213,18 +215,20 @@ fun SearchScreen(
                         .padding(top = 60.dp),
                 )
 
-                SearchPhase.RESULTS -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                ) {
-                    items(state.results, key = { it.bookId }) { book ->
-                        BookRow(
-                            book = book,
-                            onClick = { onOpenBook(book) },
-                            // A second search re-ranks the list; the rows that stayed
-                            // put glide to their new place instead of jumping.
-                            modifier = Modifier.animateItem(),
-                        )
+                SearchPhase.RESULTS -> key(state.results.hashCode()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        itemsIndexed(state.results, key = { _, book -> book.bookId }) { index, book ->
+                            StaggeredEntrance(index = index) {
+                                BookRow(
+                                    book = book,
+                                    onClick = { onOpenBook(book) },
+                                    modifier = Modifier.animateItem(),
+                                )
+                            }
+                        }
                     }
                 }
 
