@@ -407,15 +407,20 @@ fun ShelfContent(
     }
 
     // The 已下载 tab's delete is the largest of the three: the pack is a second copy of the
-    // text, so it has to say that both it and the chapters go.
+    // text, so it has to say that both it and the chapters go — and the bookmarks, which are
+    // notes about the downloaded copy and have nothing left to point at once it is gone.
     pendingDownloadDelete?.let { entry ->
         val pack = state.downloads[entry.book.bookId]
+        val bookmarkCount = state.bookmarkCounts[entry.book.bookId] ?: 0
         RemoveBookDialog(
             title = "删除《${entry.book.title}》的本机下载？",
             body = buildString {
                 append("会删除打包下载的 txt")
                 if (pack != null) append("（${formatBytes(pack.bytes)}）")
                 append("与本机已缓存的章节，站点在线书架与阅读进度都不受影响。")
+                if (bookmarkCount > 0) {
+                    append("本书的 $bookmarkCount 条本地书签也会一并删除。")
+                }
             },
             confirmLabel = "删除",
             onDismiss = { pendingDownloadDelete = null },

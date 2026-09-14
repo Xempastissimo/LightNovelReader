@@ -14,11 +14,14 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -55,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xempastissimo.lightnovelreader.data.repo.AppSettings
+import com.xempastissimo.lightnovelreader.data.repo.PageTurnMode
 import com.xempastissimo.lightnovelreader.data.repo.ReaderSettings
 import com.xempastissimo.lightnovelreader.data.repo.ReaderTheme
 import com.xempastissimo.lightnovelreader.data.repo.SettingsRepository
@@ -140,6 +144,8 @@ class SettingsViewModel(
 
     fun setReaderTheme(theme: ReaderTheme) = viewModelScope.launch { settingsRepository.setReaderTheme(theme) }
 
+    fun setPageTurnMode(mode: PageTurnMode) = viewModelScope.launch { settingsRepository.setPageTurnMode(mode) }
+
     fun setKeepScreenOn(value: Boolean) = viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
 
     fun setVolumeKeyPaging(value: Boolean) = viewModelScope.launch { settingsRepository.setVolumeKeyPaging(value) }
@@ -160,6 +166,34 @@ class SettingsViewModel(
     fun setDynamicColor(value: Boolean) = viewModelScope.launch { settingsRepository.setDynamicColor(value) }
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepository.setThemeMode(mode) }
+
+    /**
+     * OLED pure black, from the long press on the dark choices.
+     *
+     * Turning it *on* also selects the dark theme. OLED black is a property of the dark
+     * background, so switching it on while the app is light would set a flag with nothing on screen
+     * to show for it — and the gesture was made on a button that says 深色, so landing on the dark
+     * theme is what the user asked for either way. Turning it off leaves the theme alone.
+     *
+     * A message is reported because the gesture is invisible: a long press on a chip that already
+     * looks selected needs to say what it did.
+     */
+    fun toggleOledBlack() {
+        val enabled = !_state.value.app.oledBlack
+        viewModelScope.launch {
+            if (enabled) settingsRepository.setThemeMode(ThemeMode.DARK)
+            settingsRepository.setOledBlack(enabled)
+            _state.update {
+                it.copy(
+                    message = if (enabled) {
+                        "已开启 OLED 纯黑：深色背景为 #000000"
+                    } else {
+                        "已关闭 OLED 纯黑"
+                    },
+                )
+            }
+        }
+    }
 
     fun logout() {
         source.logout()
@@ -187,15 +221,16 @@ class SettingsViewModel(
     }
 
     /**
-     * Deletes the downloaded whole-book packs.
+     * Deletes the downloaded whole-book packs, and the bookmarks with them.
      *
-     * Only the packs: a downloaded book keeps working after this, because its chapters were
-     * imported when it was downloaded and the reader prefers those. What goes is the second
-     * copy of the text — the archive — which is the thing this button exists to reclaim.
+     * Only the packs, plus the bookmarks: a downloaded book keeps working after this, because its
+     * chapters were imported when it was downloaded and the reader prefers those. What goes is the
+     * second copy of the text — the archive — which is the thing this button exists to reclaim.
+     * Bookmarks go because they are notes about downloaded copies, and there are none left.
      */
     fun clearPacks() {
         viewModelScope.launch {
-            container.packStore.clear()
+            container.bookRepository.deleteAllPacks()
             refreshAccountAndCache()
             _state.update { it.copy(message = "整本下载已清理") }
         }
@@ -264,6 +299,7 @@ fun SettingsScreen(
             onParagraphSpacing = viewModel::setParagraphSpacing,
             onHorizontalPadding = viewModel::setHorizontalPadding,
             onReaderTheme = viewModel::setReaderTheme,
+            onPageTurnMode = viewModel::setPageTurnMode,
             onVolumeKeyPaging = viewModel::setVolumeKeyPaging,
             onInvertVolumeKeyPaging = viewModel::setInvertVolumeKeyPaging,
             onKeepScreenOn = viewModel::setKeepScreenOn,
@@ -273,6 +309,7 @@ fun SettingsScreen(
             onBarValue = viewModel::setBarValue,
             onResetBarColor = viewModel::resetBarColor,
             onThemeMode = viewModel::setThemeMode,
+            onToggleOledBlack = viewModel::toggleOledBlack,
             onDynamicColor = viewModel::setDynamicColor,
             onClearImageCache = viewModel::clearImageCache,
             onClearOfflineBooks = viewModel::clearOfflineBooks,
@@ -301,6 +338,7 @@ data class SettingsActions(
     val onParagraphSpacing: (Int) -> Unit = {},
     val onHorizontalPadding: (Int) -> Unit = {},
     val onReaderTheme: (ReaderTheme) -> Unit = {},
+    val onPageTurnMode: (PageTurnMode) -> Unit = {},
     val onVolumeKeyPaging: (Boolean) -> Unit = {},
     val onInvertVolumeKeyPaging: (Boolean) -> Unit = {},
     val onKeepScreenOn: (Boolean) -> Unit = {},
@@ -310,6 +348,7 @@ data class SettingsActions(
     val onBarValue: (Float) -> Unit = {},
     val onResetBarColor: () -> Unit = {},
     val onThemeMode: (ThemeMode) -> Unit = {},
+    val onToggleOledBlack: () -> Unit = {},
     val onDynamicColor: (Boolean) -> Unit = {},
     val onClearImageCache: () -> Unit = {},
     val onClearOfflineBooks: () -> Unit = {},
@@ -418,10 +457,39 @@ fun SettingsContent(
                     selected = state.reader.theme,
                     label = { it.label },
                     onSelect = actions.onReaderTheme,
+                    // 夜间 is this row's dark choice, so it is where the OLED gesture belongs.
+                    onLongSelect = { theme ->
+                        if (theme == ReaderTheme.DARK) actions.onToggleOledBlack()
+                    },
+                )
+                Text(
+                    text = oledHint(state.app.oledBlack),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.app.oledBlack) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+
+                Text(text = "翻页方向", style = MaterialTheme.typography.bodyMedium)
+                ChoiceRow(
+                    options = PageTurnMode.entries,
+                    selected = state.reader.pageTurnMode,
+                    label = { it.label },
+                    onSelect = actions.onPageTurnMode,
+                )
+                Text(
+                    text = "「左右翻页」把本章按屏幕高度真实分页，一页正好一屏，左右滑动或音量键翻页；" +
+                        "「上下滚动」是一整章连续滚动，不预先分页。" +
+                        "两种模式都会预加载相邻章节，翻到下一章不用等。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 ReaderBarColorEditor(
                     settings = state.reader,
+                    oledBlack = state.app.oledBlack,
                     onFollowsTheme = actions.onBarFollowsTheme,
                     onHue = actions.onBarHue,
                     onSaturation = actions.onBarSaturation,
@@ -435,7 +503,7 @@ fun SettingsContent(
                     onCheckedChange = actions.onVolumeKeyPaging,
                 )
                 Text(
-                    text = "开启后，音量减键翻到下一页、音量加键翻回上一页。" +
+                    text = "开启后，音量减键前进（左右翻页翻一页、上下滚动滚一屏）、音量加键后退。" +
                         "本章翻完后会接着进入上一章 / 下一章；只有在没有相邻章节时，" +
                         "音量键才恢复调节音量的作用。",
                     style = MaterialTheme.typography.labelSmall,
@@ -483,11 +551,23 @@ fun SettingsContent(
                     selected = state.app.themeMode,
                     label = { it.label },
                     onSelect = actions.onThemeMode,
+                    onLongSelect = { mode ->
+                        if (mode == ThemeMode.DARK) actions.onToggleOledBlack()
+                    },
                 )
                 Text(
                     text = "「跟随系统」会随手机的深色模式设置一起切换。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = oledHint(state.app.oledBlack),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.app.oledBlack) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
 
                 SwitchRow(
@@ -518,7 +598,8 @@ fun SettingsContent(
                 )
                 Text(
                     text = "「整本下载」是站点打包的 txt，与导入的章节各占一份空间；" +
-                        "清理它之后已下载的书仍可离线阅读，只是不能再从本机 txt 重新导入。",
+                        "清理它之后已下载的书仍可离线阅读，只是不能再从本机 txt 重新导入。" +
+                        "已下载小说的本地书签也会一并清除——书签是给已下载的书做标记的。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -705,6 +786,17 @@ private fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean
  *
  * The selected label eases between colours rather than switching instantly, which is
  * what makes a tap on a three-way choice register as having done something.
+ *
+ * [onLongSelect] adds a second, hidden action to each chip — currently OLED pure black on the two
+ * dark choices. The chips are therefore a `Surface` with `combinedClickable` rather than an
+ * `OutlinedButton`: a button owns its own click handling, so stacking a `pointerInput` long-press
+ * on top of it makes the long press fire the button's click as well, in an order that depends on
+ * pointer dispatch rather than on anything this file decides. The shape, border and 40 dp minimum
+ * height are Material's own outlined-button values, so the row looks unchanged.
+ *
+ * A long press selects the option first and then runs [onLongSelect]. `combinedClickable` fires
+ * *either* the click or the long click, never both, so without this a long press on a chip that has
+ * no second action — 跟随系统, 浅色 — would be a gesture that does nothing at all.
  */
 @Composable
 private fun <T> ChoiceRow(
@@ -712,6 +804,7 @@ private fun <T> ChoiceRow(
     selected: T,
     label: (T) -> String,
     onSelect: (T) -> Unit,
+    onLongSelect: ((T) -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -727,15 +820,39 @@ private fun <T> ChoiceRow(
                 animationSpec = tween(durationMillis = Motion.ENTER_MILLIS),
                 label = "choiceLabel",
             )
-            OutlinedButton(
-                onClick = { onSelect(option) },
-                modifier = Modifier.weight(1f),
+            val shape = RoundedCornerShape(20.dp)
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(shape)
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = { onSelect(option) },
+                        onLongClick = onLongSelect?.let { long ->
+                            {
+                                onSelect(option)
+                                long(option)
+                            }
+                        },
+                    ),
+                shape = shape,
+                color = Color.Transparent,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
-                Text(
-                    text = label(option),
-                    color = labelColor,
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 40.dp)
+                        .padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label(option),
+                        color = labelColor,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
             }
         }
     }
@@ -752,13 +869,16 @@ private fun <T> ChoiceRow(
 @Composable
 private fun ReaderBarColorEditor(
     settings: ReaderSettings,
+    oledBlack: Boolean,
     onFollowsTheme: (Boolean) -> Unit,
     onHue: (Float) -> Unit,
     onSaturation: (Float) -> Unit,
     onValue: (Float) -> Unit,
     onReset: () -> Unit,
 ) {
-    val bar = readerBarPalette(settings, readerPalette(settings.theme))
+    // The preview has to be the colour the bars will actually be, which under 「跟随阅读背景」
+    // includes whether the page behind them is OLED black.
+    val bar = readerBarPalette(settings, readerPalette(settings.theme, oledBlack))
 
     Text(text = "顶栏 / 底栏颜色", style = MaterialTheme.typography.bodyMedium)
     ReaderBarPreview(bar)
@@ -804,6 +924,17 @@ private fun ReaderBarColorEditor(
 
 /** The project's GitHub page, opened by the 开发者 card at the foot of the screen. */
 private const val DEVELOPER_PAGE_URL = "https://github.com/Xempastissimo/LightNovelReader"
+
+/**
+ * What the OLED line under either theme row says.
+ *
+ * One string for both rows because it is one switch: the long press on 深色 and the long press on
+ * 夜间 change the same setting, and the app and the reader then agree. Saying which state it is in
+ * matters because the gesture leaves no other trace on a chip that already looks selected.
+ */
+private fun oledHint(enabled: Boolean): String =
+    "长按「深色」或「夜间」可切换 OLED 纯黑：深色背景使用 #000000，OLED 屏上更省电。" +
+        "当前：" + if (enabled) "已开启（应用与阅读页都是纯黑背景）" else "未开启"
 
 /** A miniature of the reader's bars, so the colour can be judged before it is used. */
 @Composable

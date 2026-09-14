@@ -5,6 +5,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import com.xempastissimo.lightnovelreader.data.repo.AppSettings
+import com.xempastissimo.lightnovelreader.data.repo.PageTurnMode
 import com.xempastissimo.lightnovelreader.data.repo.ReaderSettings
 import com.xempastissimo.lightnovelreader.data.repo.ReaderTheme
 import com.xempastissimo.lightnovelreader.data.repo.ThemeMode
@@ -79,6 +80,7 @@ class SettingsPreviewStates : PreviewParameterProvider<SettingsUiState> {
         loggedIn,
         probeFailed,
         readerTweaked,
+        scrollingReader,
     )
 
     companion object {
@@ -126,6 +128,14 @@ class SettingsPreviewStates : PreviewParameterProvider<SettingsUiState> {
                 barSaturation = 0.55f,
                 barValue = 0.28f,
             ),
+        )
+
+        /**
+         * The other 翻页方向, so the two-way choice can be compared in the panel without
+         * flipping it in the app — which is what the drop-down exists for.
+         */
+        val scrollingReader = loggedIn.copy(
+            reader = loggedIn.reader.copy(pageTurnMode = PageTurnMode.VERTICAL),
         )
     }
 }

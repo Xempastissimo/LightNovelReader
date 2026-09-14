@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
                 LightNovelReaderTheme(
                     darkTheme = appSettings.themeMode.isDark(),
                     dynamicColor = appSettings.useDynamicColor,
+                    oledBlack = appSettings.oledBlack,
                 ) {
                     AppNavHost()
                 }

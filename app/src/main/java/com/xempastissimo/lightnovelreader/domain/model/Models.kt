@@ -87,6 +87,27 @@ data class ReadingProgress(
     val updatedAt: Long = 0L,
 )
 
+/**
+ * One local bookmark.
+ *
+ * Only ever created for a book that is downloaded whole (the 已下载 tab), and deleted with it:
+ * see `BookRepository.deleteLocalCopy`.
+ *
+ * [paragraphIndex] is an index into `ChapterContent.paragraphs`, deliberately *not* a page
+ * number. Pagination measures real text, so a page number stops meaning the same thing the
+ * moment the font size changes, while the paragraph the user marked does not move.
+ */
+data class Bookmark(
+    val bookId: Int,
+    val chapterId: Int,
+    val chapterIndex: Int,
+    val chapterTitle: String,
+    val paragraphIndex: Int,
+    /** The opening of the bookmarked paragraph, for the bookmark list. */
+    val excerpt: String,
+    val createdAt: Long = 0L,
+)
+
 /** A book the user keeps locally, with just enough metadata for the shelf list. */
 data class ShelfEntry(
     val book: Book,

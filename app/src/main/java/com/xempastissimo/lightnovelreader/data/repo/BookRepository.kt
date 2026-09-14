@@ -176,6 +176,14 @@ class BookRepository(
     private val source: BookSource,
     private val cache: ChapterCache,
     private val packs: PackStore,
+    /**
+     * Held here so that deleting a book's local copy also deletes its bookmarks.
+     *
+     * A bookmark is a note about a *downloaded* copy, so it has nothing to point at once the
+     * copy is gone — and putting that rule in the one method that removes a local copy is what
+     * keeps every present and future delete path from having to remember it.
+     */
+    private val bookmarks: BookmarkStore,
 ) {
 
     private val detailCache = HashMap<Int, BookDetail>(8)
@@ -422,12 +430,25 @@ class BookRepository(
     suspend fun deletePack(bookId: Int) = packs.delete(bookId)
 
     /**
-     * Deletes every local copy of a book: the imported chapters, the chapter cache and the
-     * downloaded pack.
+     * Deletes every downloaded pack on the device, and every bookmark with them.
+     *
+     * The pair is deliberate: 设置 → 存储 → 清理整本下载 takes away the downloaded books, and a
+     * bookmark that outlived the book it marks would be a row pointing at nothing.
+     */
+    suspend fun deleteAllPacks() {
+        packs.clear()
+        bookmarks.clear()
+    }
+
+    /**
+     * Deletes every local copy of a book: the imported chapters, the chapter cache, the
+     * downloaded pack, and the bookmarks — bookmarks only ever exist for a downloaded book, so
+     * they go with the download rather than with the chapter cache.
      */
     suspend fun deleteLocalCopy(bookId: Int) {
         cache.deleteBook(bookId)
         packs.delete(bookId)
+        bookmarks.removeAllForBook(bookId)
     }
 
     fun offlineSizeBytes(bookId: Int): Long = cache.bookSizeBytes(bookId)

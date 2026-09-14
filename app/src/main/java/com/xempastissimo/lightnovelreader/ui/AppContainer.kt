@@ -10,6 +10,7 @@ import com.xempastissimo.lightnovelreader.data.network.HttpUrlConnectionFetcher
 import com.xempastissimo.lightnovelreader.data.network.RateLimiter
 import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
+import com.xempastissimo.lightnovelreader.data.repo.BookmarkStore
 import com.xempastissimo.lightnovelreader.data.repo.ChapterCache
 import com.xempastissimo.lightnovelreader.data.repo.ImageLoader
 import com.xempastissimo.lightnovelreader.data.repo.PackStore
@@ -88,9 +89,19 @@ class AppContainer(private val context: Context) {
      */
     val packStore: PackStore by lazy { PackStore(context) }
 
-    val bookRepository: BookRepository by lazy { BookRepository(bookSource, chapterCache, packStore) }
+    val bookRepository: BookRepository by lazy {
+        BookRepository(bookSource, chapterCache, packStore, bookmarkStore)
+    }
 
     val shelfRepository: ShelfRepository by lazy { ShelfRepository(context) }
+
+    /**
+     * Local bookmarks, next to `shelf.json` under `filesDir/library/`.
+     *
+     * Belongs to the repositories rather than to one screen: the reader writes them, the shelf
+     * and the detail page count them, and `BookRepository` deletes them with a download.
+     */
+    val bookmarkStore: BookmarkStore by lazy { BookmarkStore(context) }
 
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(context) }
 

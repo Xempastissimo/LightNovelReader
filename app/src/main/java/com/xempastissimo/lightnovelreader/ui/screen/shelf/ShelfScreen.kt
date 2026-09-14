@@ -23,6 +23,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xempastissimo.lightnovelreader.data.network.HttpFailure
 import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
+import com.xempastissimo.lightnovelreader.data.repo.BookmarkStore
 import com.xempastissimo.lightnovelreader.data.repo.DownloadedBook
 import com.xempastissimo.lightnovelreader.data.repo.OfflineBook
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
@@ -84,6 +85,13 @@ data class ShelfUiState(
      * downloaded from.
      */
     val downloads: Map<Int, DownloadedBook> = emptyMap(),
+    /**
+     * How many local bookmarks each book has.
+     *
+     * The 已下载 tab's delete has to say that the bookmarks go with the download, so the count has
+     * to be on screen before the question is asked rather than looked up after it is answered.
+     */
+    val bookmarkCounts: Map<Int, Int> = emptyMap(),
     val loading: Boolean = false,
     val syncingOnline: Boolean = false,
     val loggedIn: Boolean = false,
@@ -120,6 +128,7 @@ data class ShelfUiState(
 class ShelfViewModel(
     private val shelfRepository: ShelfRepository,
     private val bookRepository: BookRepository,
+    private val bookmarkStore: BookmarkStore,
     private val source: BookSource,
     private val refreshThrottle: RefreshThrottle,
 ) : ViewModel() {
@@ -157,6 +166,13 @@ class ShelfViewModel(
             }
         }
         refreshLocalIndex()
+        // Bookmarks are counted rather than listed here: this screen only needs to say how many a
+        // deletion takes with it.
+        viewModelScope.launch {
+            bookmarkStore.bookmarks.collect { all ->
+                _state.update { it.copy(bookmarkCounts = all.groupingBy { b -> b.bookId }.eachCount()) }
+            }
+        }
         // The shelf has nothing to show until the site's own list has been read, so the
         // first open pulls it instead of presenting an empty shelf and a refresh button.
         if (source.isLoggedIn()) syncOnlineShelfNow(quiet = true)
@@ -487,7 +503,13 @@ class ShelfViewModel(
         private const val MAX_METADATA_BACKFILL = 8
 
         fun factory(container: AppContainer) = AppViewModelFactory<ShelfViewModel> {
-            ShelfViewModel(it.shelfRepository, it.bookRepository, it.bookSource, it.refreshThrottle)
+            ShelfViewModel(
+                it.shelfRepository,
+                it.bookRepository,
+                it.bookmarkStore,
+                it.bookSource,
+                it.refreshThrottle,
+            )
         }
     }
 }

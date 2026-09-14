@@ -27,6 +27,18 @@ enum class ThemeMode(val label: String) {
     DARK("深色"),
 }
 
+/**
+ * How the reader moves through a chapter.
+ *
+ * [HORIZONTAL] pages the chapter and turns pages sideways; [VERTICAL] shows the chapter as
+ * one continuous scroll and does not paginate at all. The distinction is the reader's, not
+ * an animation preference: it decides whether a page has to fit the screen exactly.
+ */
+enum class PageTurnMode(val label: String) {
+    HORIZONTAL("左右翻页"),
+    VERTICAL("上下滚动"),
+}
+
 data class ReaderSettings(
     val fontSizeSp: Float = 18f,
     val lineHeightMultiplier: Float = 1.7f,
@@ -35,6 +47,8 @@ data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.PAPER,
     val keepScreenOn: Boolean = true,
     val pageTurnAnimation: Boolean = true,
+    /** Sideways paging or one continuous vertical scroll. */
+    val pageTurnMode: PageTurnMode = PageTurnMode.HORIZONTAL,
     /** Volume-down turns the page forward and volume-up turns it back. */
     val volumeKeyPaging: Boolean = false,
     /**
@@ -75,6 +89,14 @@ data class AppSettings(
     val useDynamicColor: Boolean = true,
     val downloadConcurrency: Int = 1,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /**
+     * Paint the dark theme's background `#000000` instead of the warm near-black.
+     *
+     * A display property rather than a per-screen preference: the saving comes from the panel's
+     * pixels being *off*, which only happens at exactly black, so the app and the reader share one
+     * switch. Only the dark theme is affected — pure black under dark text would be unreadable.
+     */
+    val oledBlack: Boolean = false,
 )
 
 private val Context.settingsStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -100,6 +122,9 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
             } ?: ReaderSettings().theme,
             keepScreenOn = preferences[KEY_KEEP_SCREEN_ON] ?: ReaderSettings().keepScreenOn,
             pageTurnAnimation = preferences[KEY_PAGE_TURN_ANIMATION] ?: ReaderSettings().pageTurnAnimation,
+            pageTurnMode = preferences[KEY_PAGE_TURN_MODE]?.let { name ->
+                PageTurnMode.entries.firstOrNull { it.name == name }
+            } ?: ReaderSettings().pageTurnMode,
             volumeKeyPaging = preferences[KEY_VOLUME_KEY_PAGING] ?: ReaderSettings().volumeKeyPaging,
             invertVolumeKeyPaging = preferences[KEY_INVERT_VOLUME_KEY_PAGING]
                 ?: ReaderSettings().invertVolumeKeyPaging,
@@ -117,6 +142,7 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
             themeMode = preferences[KEY_THEME_MODE]?.let { name ->
                 ThemeMode.entries.firstOrNull { it.name == name }
             } ?: AppSettings().themeMode,
+            oledBlack = preferences[KEY_OLED_BLACK] ?: AppSettings().oledBlack,
         )
     }
 
@@ -133,6 +159,8 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
     suspend fun setKeepScreenOn(value: Boolean) = put(KEY_KEEP_SCREEN_ON, value)
 
     suspend fun setPageTurnAnimation(value: Boolean) = put(KEY_PAGE_TURN_ANIMATION, value)
+
+    suspend fun setPageTurnMode(mode: PageTurnMode) = put(KEY_PAGE_TURN_MODE, mode.name)
 
     suspend fun setVolumeKeyPaging(value: Boolean) = put(KEY_VOLUME_KEY_PAGING, value)
 
@@ -159,6 +187,8 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
 
     suspend fun setThemeMode(mode: ThemeMode) = put(KEY_THEME_MODE, mode.name)
 
+    suspend fun setOledBlack(value: Boolean) = put(KEY_OLED_BLACK, value)
+
     suspend fun setDownloadConcurrency(value: Int) = put(KEY_DOWNLOAD_CONCURRENCY, value.coerceIn(1, 3))
 
     /** Wipes every stored preference (used by "重置设置"). */
@@ -171,6 +201,7 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
             preferences.remove(KEY_THEME)
             preferences.remove(KEY_KEEP_SCREEN_ON)
             preferences.remove(KEY_PAGE_TURN_ANIMATION)
+            preferences.remove(KEY_PAGE_TURN_MODE)
             preferences.remove(KEY_VOLUME_KEY_PAGING)
             preferences.remove(KEY_INVERT_VOLUME_KEY_PAGING)
             preferences.remove(KEY_BAR_FOLLOWS_THEME)
@@ -192,6 +223,7 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
         val KEY_THEME = stringPreferencesKey("reader_theme")
         val KEY_KEEP_SCREEN_ON = booleanPreferencesKey("reader_keep_screen_on")
         val KEY_PAGE_TURN_ANIMATION = booleanPreferencesKey("reader_page_turn_animation")
+        val KEY_PAGE_TURN_MODE = stringPreferencesKey("reader_page_turn_mode")
         val KEY_VOLUME_KEY_PAGING = booleanPreferencesKey("reader_volume_key_paging")
         val KEY_INVERT_VOLUME_KEY_PAGING = booleanPreferencesKey("reader_invert_volume_key_paging")
         val KEY_BAR_FOLLOWS_THEME = booleanPreferencesKey("reader_bar_follows_theme")
@@ -201,5 +233,6 @@ class SettingsRepository(private val store: DataStore<Preferences>) {
         val KEY_DYNAMIC_COLOR = booleanPreferencesKey("app_dynamic_color")
         val KEY_DOWNLOAD_CONCURRENCY = intPreferencesKey("app_download_concurrency")
         val KEY_THEME_MODE = stringPreferencesKey("app_theme_mode")
+        val KEY_OLED_BLACK = booleanPreferencesKey("app_oled_black")
     }
 }

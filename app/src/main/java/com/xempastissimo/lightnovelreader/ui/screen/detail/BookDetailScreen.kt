@@ -54,6 +54,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xempastissimo.lightnovelreader.data.network.RefreshThrottle
 import com.xempastissimo.lightnovelreader.data.repo.BookRepository
+import com.xempastissimo.lightnovelreader.data.repo.BookmarkStore
 import com.xempastissimo.lightnovelreader.data.repo.DownloadedBook
 import com.xempastissimo.lightnovelreader.data.repo.ShelfRepository
 import com.xempastissimo.lightnovelreader.data.repo.formatBytes
@@ -107,6 +108,13 @@ data class BookDetailUiState(
     val packSupported: Boolean = false,
     /** The whole-book pack already on this device, if any. */
     val pack: DownloadedBook? = null,
+    /**
+     * How many local bookmarks this book has.
+     *
+     * Shown by the delete prompt, because deleting the download deletes them and the user has to
+     * be told before answering rather than after.
+     */
+    val bookmarkCount: Int = 0,
     val packDownloading: Boolean = false,
     /** What the pack download is doing right now: 正在下载整本… / 正在导入 12/270 章… */
     val packPhase: String? = null,
@@ -128,6 +136,7 @@ class BookDetailViewModel(
     private val bookId: Int,
     private val repository: BookRepository,
     private val shelfRepository: ShelfRepository,
+    private val bookmarkStore: BookmarkStore,
     private val source: BookSource,
     private val refreshThrottle: RefreshThrottle,
 ) : ViewModel() {
@@ -150,6 +159,13 @@ class BookDetailViewModel(
             )
         }
         load()
+        // Counted rather than listed: the only thing this screen does with bookmarks is warn that
+        // a delete takes them along.
+        viewModelScope.launch {
+            bookmarkStore.bookmarks.collect { all ->
+                _state.update { it.copy(bookmarkCount = all.count { b -> b.bookId == bookId }) }
+            }
+        }
         // The pack directory is read from disk rather than trusted to be in memory: this
         // screen can be the first thing opened after a cold start, and another screen may
         // have downloaded (or deleted) a pack while this one sat on the back stack.
@@ -404,7 +420,14 @@ class BookDetailViewModel(
 
     companion object {
         fun factory(container: AppContainer, bookId: Int) = AppViewModelFactory<BookDetailViewModel> {
-            BookDetailViewModel(bookId, it.bookRepository, it.shelfRepository, it.bookSource, it.refreshThrottle)
+            BookDetailViewModel(
+                bookId,
+                it.bookRepository,
+                it.shelfRepository,
+                it.bookmarkStore,
+                it.bookSource,
+                it.refreshThrottle,
+            )
         }
     }
 }
@@ -652,7 +675,14 @@ fun BookDetailContent(
             onDismissRequest = { confirmDeletePack = false },
             title = { Text("删除本机下载？") },
             text = {
-                Text("会删除打包下载的 txt 与导入的章节，站点在线书架与阅读进度都不受影响。")
+                Text(
+                    buildString {
+                        append("会删除打包下载的 txt 与导入的章节，站点在线书架与阅读进度都不受影响。")
+                        if (state.bookmarkCount > 0) {
+                            append("本书的 ${state.bookmarkCount} 条本地书签也会一并删除。")
+                        }
+                    },
+                )
             },
             confirmButton = {
                 TextButton(

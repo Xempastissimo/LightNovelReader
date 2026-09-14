@@ -8,11 +8,21 @@ import com.xempastissimo.lightnovelreader.data.repo.ReaderTheme
 /** The reader page's own colours; deliberately independent of the Material scheme. */
 data class ReaderPalette(val background: Color, val text: Color)
 
-fun readerPalette(theme: ReaderTheme): ReaderPalette = when (theme) {
+/**
+ * The page colours for a reading theme.
+ *
+ * [oledBlack] only reaches [ReaderTheme.DARK]: it swaps the night page's near-black for `#000000`,
+ * which is where an OLED panel stops drawing power. The other three themes are light pages on
+ * purpose, and painting them black would leave the theme's own dark ink on it.
+ */
+fun readerPalette(theme: ReaderTheme, oledBlack: Boolean = false): ReaderPalette = when (theme) {
     ReaderTheme.PAPER -> ReaderPalette(ReaderPaper, ReaderPaperText)
     ReaderTheme.LIGHT -> ReaderPalette(ReaderWhite, ReaderWhiteText)
     ReaderTheme.GREEN -> ReaderPalette(ReaderGreen, ReaderGreenText)
-    ReaderTheme.DARK -> ReaderPalette(ReaderNight, ReaderNightText)
+    ReaderTheme.DARK -> ReaderPalette(
+        background = if (oledBlack) Color.Black else ReaderNight,
+        text = ReaderNightText,
+    )
 }
 
 /**

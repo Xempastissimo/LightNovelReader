@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -68,19 +69,26 @@ private val LightColorScheme = lightColorScheme(
  *
  * Dynamic colour is opt-in (see 设置 → 外观) because the reader's paper palette is
  * part of the reading experience and a random accent colour fights it.
+ *
+ * [oledBlack] replaces the dark scheme's large surfaces with `#000000` — see
+ * [withOledBlack]. It is ignored on the light scheme, where pure black would be a
+ * background with dark text on it.
  */
 @Composable
 fun LightNovelReaderTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
+    oledBlack: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            val dynamic = if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            if (darkTheme && oledBlack) dynamic.withOledBlack() else dynamic
         }
 
+        darkTheme && oledBlack -> DarkColorScheme.withOledBlack()
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
@@ -91,6 +99,26 @@ fun LightNovelReaderTheme(
         content = content,
     )
 }
+
+/**
+ * The same scheme with its page-level surfaces at `#000000`.
+ *
+ * Only `background` and `surface` change. Those are the two that cover whole screens — a
+ * `Scaffold`'s container and a standalone `Surface` — which is where the panel's power actually
+ * goes; and they are the two whose replacement cannot cost anybody legibility, because the
+ * container roles that dropdowns, sheets and the navigation bar paint with are left exactly as
+ * they were. Painting *those* black as well would put a black menu on a black page, which on an
+ * OLED panel is a menu with no visible edge: there is no shadow to see when the surface behind it
+ * is already off.
+ *
+ * Written as an extension rather than a second `darkColorScheme(...)` call so that it applies to
+ * the dynamic scheme too — the wallpaper's idea of "dark" is a dark grey, and a user asking for
+ * pure black has asked for it regardless of where the rest of the colours came from.
+ */
+fun ColorScheme.withOledBlack(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+)
 
 @Preview(showBackground = true, name = "Light Theme")
 @Composable
@@ -106,6 +134,17 @@ private fun LightThemePreview() {
 @Composable
 private fun DarkThemePreview() {
     LightNovelReaderTheme(darkTheme = true) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("轻小说阅读器", style = MaterialTheme.typography.headlineMedium)
+        }
+    }
+}
+
+/** The night theme at `#000000`, which is what the OLED switch is for. */
+@Preview(showBackground = true, name = "Dark Theme · OLED")
+@Composable
+private fun OledThemePreview() {
+    LightNovelReaderTheme(darkTheme = true, oledBlack = true) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("轻小说阅读器", style = MaterialTheme.typography.headlineMedium)
         }

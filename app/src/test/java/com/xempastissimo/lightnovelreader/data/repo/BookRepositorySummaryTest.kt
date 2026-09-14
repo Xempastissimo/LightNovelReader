@@ -38,6 +38,7 @@ class BookRepositorySummaryTest {
         source,
         ChapterCache(File(folder.root, "library")),
         PackStore(File(folder.root, "packs")) { 1_789_225_000_000L },
+        BookmarkStore(File(folder.root, "library/bookmarks.json")) { 1_789_225_000_000L },
     )
 
     @Test

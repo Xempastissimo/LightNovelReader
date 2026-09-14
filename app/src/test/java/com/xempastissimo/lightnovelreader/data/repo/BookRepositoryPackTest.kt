@@ -8,6 +8,7 @@ import com.xempastissimo.lightnovelreader.data.source.PackedBook
 import com.xempastissimo.lightnovelreader.data.source.wenku8.Wenku8PackParser
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.BookDetail
+import com.xempastissimo.lightnovelreader.domain.model.Bookmark
 import com.xempastissimo.lightnovelreader.domain.model.Chapter
 import com.xempastissimo.lightnovelreader.domain.model.ChapterContent
 import com.xempastissimo.lightnovelreader.domain.model.ContentBlock
@@ -44,8 +45,21 @@ class BookRepositoryPackTest {
     private fun repository(): BookRepository {
         val cache = ChapterCache(File(folder.root, "library"))
         val packs = PackStore(File(folder.root, "packs")) { DOWNLOADED_AT }
-        return BookRepository(source, cache, packs)
+        return BookRepository(source, cache, packs, bookmarkStore())
     }
+
+    /** One per repository, over the same folder, so a test can look at what a delete left behind. */
+    private fun bookmarkStore() =
+        BookmarkStore(File(folder.root, "library/bookmarks.json")) { DOWNLOADED_AT }
+
+    private fun bookmark(bookId: Int, chapterId: Int) = Bookmark(
+        bookId = bookId,
+        chapterId = chapterId,
+        chapterIndex = 0,
+        chapterTitle = "第一章 开端",
+        paragraphIndex = 2,
+        excerpt = "第一段的开头。",
+    )
 
     private val detail: BookDetail
         get() = BookDetail(
@@ -216,6 +230,71 @@ class BookRepositoryPackTest {
         assertNull(repository.downloadedBook(1973))
         assertTrue(repository.cachedChapterIds(1973).isEmpty())
         assertEquals(0L, repository.totalPackSizeBytes())
+    }
+
+    /**
+     * A bookmark marks a *downloaded* copy, so deleting the download takes it with it.
+     *
+     * `deleteLocalCopy` is the one place that removes a book's local copy, which is why the
+     * rule lives there: both the 已下载 tab's delete and the detail page's delete go through it,
+     * and neither has to remember the bookmarks.
+     */
+    @Test
+    fun `deleting the local copy takes that book's bookmarks and no others`() = runTest {
+        val bookmarks = bookmarkStore()
+        val repository = BookRepository(
+            source,
+            ChapterCache(File(folder.root, "library")),
+            PackStore(File(folder.root, "packs")) { DOWNLOADED_AT },
+            bookmarks,
+        )
+        repository.downloadPack(1973, detail)
+        bookmarks.add(bookmark(bookId = 1973, chapterId = 101))
+        bookmarks.add(bookmark(bookId = 42, chapterId = 900))
+
+        repository.deleteLocalCopy(1973)
+
+        assertEquals(listOf(42), bookmarks.bookmarks.value.map { it.bookId })
+    }
+
+    /**
+     * 设置 → 存储 → 清理离线章节 is not the download being deleted: the pack is still there, so
+     * the book is still a downloaded one and its bookmarks still have something to point at.
+     */
+    @Test
+    fun `clearing the chapter cache leaves the bookmarks alone`() = runTest {
+        val bookmarks = bookmarkStore()
+        val repository = BookRepository(
+            source,
+            ChapterCache(File(folder.root, "library")),
+            PackStore(File(folder.root, "packs")) { DOWNLOADED_AT },
+            bookmarks,
+        )
+        repository.downloadPack(1973, detail)
+        bookmarks.add(bookmark(bookId = 1973, chapterId = 101))
+
+        repository.deleteOfflineCopy(1973)
+
+        assertEquals(listOf(1973), bookmarks.bookmarks.value.map { it.bookId })
+    }
+
+    /** 清理整本下载 is the download going away wholesale, so the bookmarks go too. */
+    @Test
+    fun `clearing every pack clears the bookmarks as well`() = runTest {
+        val bookmarks = bookmarkStore()
+        val repository = BookRepository(
+            source,
+            ChapterCache(File(folder.root, "library")),
+            PackStore(File(folder.root, "packs")) { DOWNLOADED_AT },
+            bookmarks,
+        )
+        repository.downloadPack(1973, detail)
+        bookmarks.add(bookmark(bookId = 1973, chapterId = 101))
+
+        repository.deleteAllPacks()
+
+        assertNull(repository.downloadedBook(1973))
+        assertTrue(bookmarks.bookmarks.value.isEmpty())
     }
 
     /** The pack also carries the catalogue, which is what makes offline opening possible. */
