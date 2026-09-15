@@ -63,12 +63,14 @@ data class SearchUiState(
     val error: String? = null,
     val requiresLogin: Boolean = false,
     val history: List<String> = emptyList(),
+    /** Whether a search has completed (success or failure). */
+    val searched: Boolean = false,
 ) {
     val hasSearched: Boolean get() = results.isNotEmpty() || error != null
 }
 
 /** Which of the search screen's mutually exclusive bodies is on show. */
-private enum class SearchPhase { SEARCHING, LOGIN, ERROR, RESULTS, HISTORY }
+private enum class SearchPhase { SEARCHING, LOGIN, ERROR, RESULTS, EMPTY, HISTORY }
 
 class SearchViewModel(
     private val repository: BookRepository,
@@ -102,7 +104,7 @@ class SearchViewModel(
             runCatching { repository.search(target, _state.value.field) }
                 .onSuccess { books ->
                     shelfRepository.recordSearch(target)
-                    _state.update { it.copy(results = books, searching = false, error = null) }
+                    _state.update { it.copy(results = books, searching = false, error = null, searched = true) }
                 }
                 .onFailure { error ->
                     _state.update {
@@ -111,6 +113,7 @@ class SearchViewModel(
                             searching = false,
                             error = error.toUserMessage(),
                             requiresLogin = error is HttpFailure.AuthRequired,
+                            searched = true,
                         )
                     }
                 }
@@ -179,6 +182,7 @@ fun SearchScreen(
             state.requiresLogin -> SearchPhase.LOGIN
             state.error != null -> SearchPhase.ERROR
             state.results.isNotEmpty() -> SearchPhase.RESULTS
+            state.searched -> SearchPhase.EMPTY
             else -> SearchPhase.HISTORY
         }
 
@@ -231,6 +235,14 @@ fun SearchScreen(
                         }
                     }
                 }
+
+                SearchPhase.EMPTY -> EmptyBox(
+                    title = "搜索结果为空",
+                    hint = "没有找到与「${state.keyword}」相关的内容",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 60.dp),
+                )
 
                 SearchPhase.HISTORY -> Column(modifier = Modifier.fillMaxSize()) {
                     if (state.history.isNotEmpty()) {

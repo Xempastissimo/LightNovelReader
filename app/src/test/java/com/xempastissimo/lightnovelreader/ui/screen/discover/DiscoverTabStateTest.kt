@@ -20,7 +20,7 @@ class DiscoverTabStateTest {
     fun `a tab this session knows nothing about reads as loading`() {
         assertEquals(
             DiscoverPhase.LOADING,
-            DiscoverUiState().tabState(DiscoverTab.ALL_VISIT).phase,
+            DiscoverUiState().tabState(DiscoverTab.TODAY).phase,
         )
     }
 

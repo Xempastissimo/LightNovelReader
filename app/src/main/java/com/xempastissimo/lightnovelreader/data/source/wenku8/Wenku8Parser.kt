@@ -655,12 +655,16 @@ object Wenku8Parser {
 
             val plain = TextCleaner.oneLine(container.text())
             val author = Wenku8Selectors.LIST_AUTHOR.find(plain)?.groupValues?.get(1).orEmpty()
+            val category = Wenku8Selectors.LIST_CATEGORY.find(plain)?.groupValues?.get(1).orEmpty()
+            val updatedAt = Wenku8Selectors.LIST_UPDATED.find(plain)?.groupValues?.get(1).orEmpty()
 
             books[bookId] = Book(
                 bookId = bookId,
                 title = title,
                 shortTitle = title,
                 author = author,
+                category = category,
+                updatedAt = updatedAt,
                 coverUrl = Wenku8Urls.coverFromPage(entryCoverOf(container, bookId)),
             )
         }

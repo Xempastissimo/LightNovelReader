@@ -1,5 +1,12 @@
 package com.xempastissimo.lightnovelreader.ui.component
 
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
@@ -14,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -22,14 +30,21 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.ui.theme.LightNovelReaderTheme
+import kotlin.math.sin
 
 /**
  * Shared list widgets.
@@ -92,6 +107,15 @@ fun BookCard(
                         text = book.category,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (book.updatedAt.isNotBlank()) {
+                    Text(
+                        text = book.updatedAt,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -270,6 +294,90 @@ fun LoadingBox(modifier: Modifier = Modifier, label: String? = null) {
                 )
             }
         }
+    }
+}
+
+private const val WAVE_BAR_COUNT = 5
+private const val WAVE_BAR_WIDTH_DP = 3
+private const val WAVE_BAR_GAP_DP = 4
+private const val WAVE_MAX_HEIGHT_DP = 18
+private const val WAVE_MIN_HEIGHT_DP = 4
+private const val WAVE_DURATION_MS = 1200
+
+/**
+ * A compact waveform-style loading indicator for "load more" at the bottom of a list.
+ *
+ * Draws [WAVE_BAR_COUNT] vertical rounded bars that pulse in a staggered wave pattern
+ * from left to right, with "正在加载更多…" text below.
+ */
+@Composable
+fun LoadMoreIndicator(modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.primary
+    val barCount = WAVE_BAR_COUNT
+    val barWidth = WAVE_BAR_WIDTH_DP.dp
+    val gap = WAVE_BAR_GAP_DP.dp
+    val barWidthPx: Float
+    val gapPx: Float
+    val maxHeightPx: Float
+    val minHeightPx: Float
+    with(LocalDensity.current) {
+        barWidthPx = barWidth.toPx()
+        gapPx = gap.toPx()
+        maxHeightPx = WAVE_MAX_HEIGHT_DP.dp.toPx()
+        minHeightPx = WAVE_MIN_HEIGHT_DP.dp.toPx()
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "wave")
+    val animValues = List(barCount) { index ->
+        val delay = index * WAVE_DURATION_MS / barCount / 2
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = InfiniteRepeatableSpec(
+                animation = tween(
+                    durationMillis = WAVE_DURATION_MS,
+                    delayMillis = delay,
+                    easing = LinearEasing,
+                ),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "bar-$index",
+        )
+    }
+
+    val totalWidth = barWidthPx * barCount + gapPx * (barCount - 1)
+    val totalHeight = maxHeightPx
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Canvas(
+            modifier = Modifier
+                .width(with(LocalDensity.current) { totalWidth.toDp() })
+                .height(with(LocalDensity.current) { totalHeight.toDp() }),
+        ) {
+            val centerY = size.height / 2f
+            for (i in 0 until barCount) {
+                val fraction = animValues[i].value
+                val barHeight = minHeightPx + (maxHeightPx - minHeightPx) * fraction
+                val x = i * (barWidthPx + gapPx)
+                val y = centerY - barHeight / 2f
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(x, y),
+                    size = Size(barWidthPx, barHeight),
+                    cornerRadius = CornerRadius(barWidthPx / 2f),
+                )
+            }
+        }
+
+        Text(
+            text = "正在加载更多…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
     }
 }
 

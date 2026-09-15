@@ -122,6 +122,12 @@ object Wenku8Selectors {
     /** "作者:xyz" / "状态:连载中" trailing text inside a ranking entry. */
     val LIST_AUTHOR = Regex("""作者[:：]\s*([^\s/]+)""")
 
+    /** "分类:xyz" inside a ranking entry — stops at the next field label. */
+    val LIST_CATEGORY = Regex("""分类[:：]\s*(.+?)(?=更新[:：]|字数[:：]|Tags[:：]|简介[:：]|$)""")
+
+    /** "更新:2026-09-14" inside a ranking entry — stops at the `/` delimiter. */
+    val LIST_UPDATED = Regex("""更新[:：]\s*(\d{4}-\d{2}-\d{2})(?=/)""")
+
     // ------------------------------------------------------------------ bookcase
 
     /** `/modules/article/readbookcase.php?aid={aid}&bid={bid}[&cid={cid}]`. */

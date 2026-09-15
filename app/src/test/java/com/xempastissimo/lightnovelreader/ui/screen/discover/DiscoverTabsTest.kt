@@ -26,7 +26,7 @@ class DiscoverTabsTest {
     fun `a tab already read is shown without a request`() {
         assertEquals(
             TabAction.SHOW_CACHED,
-            tabAction(DiscoverTab.ALL_VISIT, DiscoverTab.RECENT, listOf(book)),
+            tabAction(DiscoverTab.TODAY, DiscoverTab.RECENT, listOf(book)),
         )
     }
 
@@ -34,7 +34,7 @@ class DiscoverTabsTest {
     fun `a tab never read is fetched`() {
         assertEquals(
             TabAction.FETCH,
-            tabAction(DiscoverTab.ALL_VISIT, DiscoverTab.RECENT, null),
+            tabAction(DiscoverTab.TODAY, DiscoverTab.RECENT, null),
         )
     }
 
@@ -59,7 +59,7 @@ class DiscoverTabsTest {
         )
         assertEquals(
             TabAction.SHOW_CACHED,
-            tabAction(DiscoverTab.ALL_VISIT, DiscoverTab.RECENT, emptyList()),
+            tabAction(DiscoverTab.TODAY, DiscoverTab.RECENT, emptyList()),
         )
     }
 }

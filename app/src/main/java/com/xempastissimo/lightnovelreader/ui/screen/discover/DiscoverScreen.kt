@@ -24,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -46,6 +45,7 @@ import com.xempastissimo.lightnovelreader.ui.AppViewModelFactory
 import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.component.BookCard
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
+import com.xempastissimo.lightnovelreader.ui.component.LoadMoreIndicator
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
@@ -59,12 +59,11 @@ import kotlinx.coroutines.launch
 /** The ranking tabs the home screen exposes. */
 enum class DiscoverTab(val label: String, val rankType: RankType?, val fullOnly: Boolean = false) {
     RECENT("最近更新", null),
-    ALL_VISIT("热门", RankType.ALL_VISIT),
-    MONTH("本月", RankType.MONTH_VISIT),
-    DAY("今日", RankType.DAY_VISIT),
-    ANIME("动画化", RankType.ANIME),
-    NEW("新书", RankType.POST_DATE),
-    FINISHED("完结", RankType.FULL_FLAG, fullOnly = true),
+    TODAY("今日热榜", RankType.DAY_VISIT),
+    MONTH("本月热榜", RankType.MONTH_VISIT),
+    FOLLOWED("最受关注", RankType.GOOD_NUM),
+    ANIME("已动画化", RankType.ANIME),
+    NEW("最新入库", RankType.POST_DATE),
 }
 
 /** Which of a tab's mutually exclusive bodies is on show. */
@@ -87,6 +86,12 @@ data class DiscoverTabState(
     val loading: Boolean = false,
     val error: String? = null,
     val requiresLogin: Boolean = false,
+    /** Next page to fetch (1-based). */
+    val nextPage: Int = 1,
+    /** Whether more pages are available. */
+    val hasMore: Boolean = true,
+    /** Whether a next-page fetch is in flight. */
+    val loadingMore: Boolean = false,
 ) {
     val phase: DiscoverPhase
         get() = when {
@@ -164,6 +169,40 @@ class DiscoverViewModel(
     fun retry() = startLoad(_state.value.tab)
 
     /**
+     * Load the next page for the current tab (infinite scroll).
+     *
+     * Deduplicated: a second call while a fetch is in flight is a no-op.
+     */
+    fun loadMore() {
+        val tab = _state.value.tab
+        val tabState = _state.value.tabs[tab] ?: return
+        if (tabState.loadingMore || !tabState.hasMore) return
+        _state.update {
+            it.copy(tabs = it.tabs + (tab to tabState.copy(loadingMore = true)))
+        }
+        viewModelScope.launch {
+            val result = runCatching { fetchPage(tab, tabState.nextPage) }
+            _state.update { current ->
+                val previous = current.tabState(tab)
+                val failure = result.exceptionOrNull()
+                val newBooks = result.getOrNull()
+                val tabState = if (failure == null && newBooks != null) {
+                    val merged = (previous.books.orEmpty()) + newBooks
+                    previous.copy(
+                        books = merged,
+                        nextPage = previous.nextPage + 1,
+                        hasMore = newBooks.size >= PAGE_SIZE,
+                        loadingMore = false,
+                    )
+                } else {
+                    previous.copy(loadingMore = false)
+                }
+                current.copy(tabs = current.tabs + (tab to tabState))
+            }
+        }
+    }
+
+    /**
      * Called every time the screen comes back to the foreground.
      *
      * The lists (and the covers derived with them) come from pages the source
@@ -203,7 +242,14 @@ class DiscoverViewModel(
             it.copy(
                 tab = tab,
                 tabs = it.tabs + (
-                    tab to it.tabState(tab).copy(loading = true, error = null, requiresLogin = false)
+                    tab to it.tabState(tab).copy(
+                        loading = true,
+                        error = null,
+                        requiresLogin = false,
+                        nextPage = 1,
+                        hasMore = true,
+                        loadingMore = false,
+                    )
                     ),
             )
         }
@@ -217,11 +263,14 @@ class DiscoverViewModel(
                 val previous = current.tabState(tab)
                 val failure = result.exceptionOrNull()
                 val tabState = if (failure == null) {
+                    val books = result.getOrThrow()
                     previous.copy(
-                        books = result.getOrThrow(),
+                        books = books,
                         loading = false,
                         error = null,
                         requiresLogin = false,
+                        nextPage = if (books.isNotEmpty()) 2 else 1,
+                        hasMore = books.size >= PAGE_SIZE,
                     )
                 } else {
                     // A failed read leaves nothing to show later, so the tab is retried the next
@@ -247,7 +296,15 @@ class DiscoverViewModel(
         else -> emptyList()
     }
 
+    private suspend fun fetchPage(tab: DiscoverTab, page: Int): List<Book> = when {
+        tab.rankType != null -> repository.rank(tab.rankType, page)
+        else -> emptyList()
+    }
+
     companion object {
+        /** Page size threshold: if a page returns fewer items, no more pages follow. */
+        private const val PAGE_SIZE = 20
+
         fun factory(container: AppContainer) = AppViewModelFactory<DiscoverViewModel> {
             DiscoverViewModel(it.bookRepository, it.refreshThrottle)
         }
@@ -353,6 +410,7 @@ fun DiscoverScreen(
                 onOpenSearch = onOpenSearch,
                 onRefresh = viewModel::refresh,
                 onRetry = viewModel::retry,
+                onLoadMore = viewModel::loadMore,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -373,6 +431,7 @@ private fun DiscoverTabBody(
     onOpenSearch: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val errorMessage = tabState.error
@@ -429,20 +488,33 @@ private fun DiscoverTabBody(
                     .padding(top = 80.dp),
             )
 
-            DiscoverPhase.CONTENT -> key(tabState.books.orEmpty().hashCode()) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    itemsIndexed(tabState.books.orEmpty(), key = { _, book -> book.bookId }) { index, book ->
-                        StaggeredEntrance(index = index) {
-                            BookCard(
-                                book = book,
-                                onClick = { onOpenBook(book) },
-                                modifier = Modifier.animateItem(),
-                            )
-                        }
+            DiscoverPhase.CONTENT -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                itemsIndexed(
+                    tabState.books.orEmpty(),
+                    key = { _, book -> book.bookId },
+                ) { index, book ->
+                    // Trigger next page load when reaching near the end.
+                    if (index == tabState.books.orEmpty().size - 5 && tabState.hasMore && !tabState.loadingMore) {
+                        LaunchedEffect(Unit) { onLoadMore() }
+                    }
+                    StaggeredEntrance(index = index) {
+                        BookCard(
+                            book = book,
+                            onClick = { onOpenBook(book) },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
+                // Loading indicator at the bottom while fetching the next page.
+                if (tabState.loadingMore) {
+                    item(key = "load-more") {
+                        LoadMoreIndicator(
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
                     }
                 }
             }
