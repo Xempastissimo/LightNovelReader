@@ -1,17 +1,29 @@
 package com.xempastissimo.lightnovelreader.ui.screen.shelf
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -19,6 +31,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -37,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -44,10 +58,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.delay
 import com.xempastissimo.lightnovelreader.data.repo.formatBytes
 import com.xempastissimo.lightnovelreader.domain.model.Book
 import com.xempastissimo.lightnovelreader.domain.model.ShelfEntry
@@ -56,6 +73,7 @@ import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.ShelfRow
 import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
+import com.xempastissimo.lightnovelreader.ui.component.RotatingIcon
 
 /** Which of the shelf's mutually exclusive bodies is on show. */
 private enum class ShelfPhase { LOADING, ERROR, EMPTY, CONTENT }
@@ -79,6 +97,8 @@ data class ShelfActions(
     val onRemove: (ShelfEntry) -> Unit = {},
     val onDeleteOffline: (ShelfEntry) -> Unit = {},
     val onDeleteDownloaded: (ShelfEntry) -> Unit = {},
+    /** The bytes 已缓存 holds for one book, so the removal question can name the cost. */
+    val offlineSizeBytes: (Int) -> Long = { 0L },
     val onOpenBook: (Book) -> Unit = {},
     val onContinueReading: (Int, Int) -> Unit = { _, _ -> },
     val onOpenSearch: () -> Unit = {},
@@ -102,11 +122,18 @@ fun ShelfContent(
     var pendingRemoval by remember { mutableStateOf<ShelfEntry?>(null) }
     var pendingOfflineDelete by remember { mutableStateOf<ShelfEntry?>(null) }
     var pendingDownloadDelete by remember { mutableStateOf<ShelfEntry?>(null) }
+    var pendingMultiSelectRemoval by remember { mutableStateOf(false) }
     var menuBookId by remember { mutableStateOf<Int?>(null) }
 
     // The two tabs below the site's own shelf are local; only they carry a copy that can be
     // deleted on its own, and the wording of every delete follows from which one is on show.
     val localTab = state.tab == ShelfTab.CACHED || state.tab == ShelfTab.DOWNLOADED
+
+    // How many chapters a book has, when this screen happens to know: a downloaded pack stores
+    // its own catalogue, so those rows can carry a real reading-progress bar. A book whose
+    // catalogue has never been read here gets no bar at all, because an invented denominator
+    // would be a made-up percentage.
+    fun chapterTotalOf(bookId: Int): Int = state.downloads[bookId]?.tocTotal ?: 0
 
     fun requestDelete(entry: ShelfEntry) {
         when (state.tab) {
@@ -136,7 +163,7 @@ fun ShelfContent(
                         Text(if (state.allVisibleSelected) "取消全选" else "全选")
                     }
                     IconButton(
-                        onClick = actions.onRemoveSelected,
+                        onClick = { pendingMultiSelectRemoval = true },
                         enabled = state.selection.isNotEmpty(),
                     ) {
                         Icon(Icons.Filled.Delete, contentDescription = "移出书架")
@@ -152,7 +179,9 @@ fun ShelfContent(
                             Icon(Icons.Filled.CheckCircle, contentDescription = "多选")
                         }
                         IconButton(onClick = actions.onSyncOnlineShelf) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "同步站点在线书架")
+                            RotatingIcon(isRefreshing = state.syncingOnline) {
+                                Icon(Icons.Filled.Refresh, contentDescription = "同步站点在线书架")
+                            }
                         }
                     }
                 },
@@ -296,7 +325,14 @@ fun ShelfContent(
                                                     ""
                                                 }
                                         },
-                                        progressFraction = null,
+                                        progressFraction = entry.progress?.let { progress ->
+                                            val total = chapterTotalOf(entry.book.bookId)
+                                            if (total > 0) {
+                                                (progress.chapterIndex + 1).toFloat() / total
+                                            } else {
+                                                null
+                                            }
+                                        },
                                         offline = download != null || cachedCopy != null,
                                         offlineText = when {
                                             download != null ->
@@ -366,10 +402,16 @@ fun ShelfContent(
     // Removing now always reaches the account's bookshelf on the site, so the tap asks
     // first and says plainly what else it takes with it.
     pendingRemoval?.let { entry ->
+        // The delete reaches the chapter files too, so it says how much that costs when the
+        // screen knows: "删除本机已缓存的章节" is otherwise a size the user never sees.
+        val cachedBytes = actions.offlineSizeBytes(entry.book.bookId)
         RemoveBookDialog(
             title = "移除《${entry.book.title}》？",
             body = buildString {
-                append("会从站点在线书架中移除，并删除本机已缓存的章节。")
+                append("会从站点在线书架中移除，并删除本机")
+                if (cachedBytes > 0) append("已缓存的 ${formatBytes(cachedBytes)} 章节")
+                else append("已缓存的章节")
+                append("。")
                 if (entry.progress != null) {
                     append("阅读进度会一并清除。")
                 }
@@ -427,6 +469,20 @@ fun ShelfContent(
             },
         )
     }
+
+    // Multi-select removal confirmation dialog
+    if (pendingMultiSelectRemoval && state.selection.isNotEmpty()) {
+        RemoveBookDialog(
+            title = "移除选中的 ${state.selection.size} 本书？",
+            body = "会从站点在线书架中移除选中的所有书籍，并删除本机已缓存的章节。阅读进度会一并清除。",
+            confirmLabel = "移除",
+            onDismiss = { pendingMultiSelectRemoval = false },
+            onConfirm = {
+                pendingMultiSelectRemoval = false
+                actions.onRemoveSelected()
+            },
+        )
+    }
 }
 
 /** How opaque the confirmation card is; the shelf stays faintly visible through it. */
@@ -452,56 +508,116 @@ private fun RemoveBookDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(50)
+        visible = true
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
-            contentAlignment = Alignment.BottomCenter,
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(200)) + scaleIn(
+                initialScale = 0.9f,
+                animationSpec = tween(200),
+            ),
+            exit = fadeOut(animationSpec = tween(150)) + scaleOut(
+                targetScale = 0.9f,
+                animationSpec = tween(150),
+            ),
         ) {
-            Surface(
+            Box(
                 modifier = Modifier
-                    .padding(horizontal = 20.dp, vertical = 24.dp)
-                    .fillMaxWidth()
-                    // Swallows taps that land on the card so they never reach the scrim.
-                    .pointerInput(Unit) { detectTapGestures { } },
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = CONFIRM_SURFACE_ALPHA),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                shadowElevation = 8.dp,
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+                contentAlignment = Alignment.BottomCenter,
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(text = title, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = body,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Surface(
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp, vertical = 24.dp)
+                        .fillMaxWidth()
+                        // Swallows taps that land on the card so they never reach the scrim.
+                        .pointerInput(Unit) { detectTapGestures { } },
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = CONFIRM_SURFACE_ALPHA),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shadowElevation = 8.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.weight(1f),
+                        // Warning icon
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.errorContainer),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Text("取消")
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(28.dp),
+                            )
                         }
-                        Button(
-                            onClick = onConfirm,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Title
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+
+                        // Body
+                        Text(
+                            text = body,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Text(confirmLabel)
+                            OutlinedButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text("取消")
+                            }
+                            Button(
+                                onClick = onConfirm,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                ),
+                                elevation = ButtonDefaults.buttonElevation(
+                                    defaultElevation = 2.dp,
+                                    pressedElevation = 4.dp,
+                                ),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(confirmLabel)
+                            }
                         }
                     }
                 }
