@@ -2,15 +2,15 @@ package com.xempastissimo.lightnovelreader.data.source.wenku8
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * The bookshelf page, against a capture of the real markup.
  *
  * This page is the one place where guessing went wrong twice, so it is pinned down
- * properly: removal is a *form* (plus a `javascript:` per-row control), and the bookshelf
- * numbers its rows differently from every other page in the site.
+ * properly: removal is driven by the ids the page itself carries (a `javascript:` per-row
+ * control, not a link), and the bookshelf numbers its rows differently from every other
+ * page in the site.
  */
 class BookcasePageTest {
 
@@ -135,21 +135,20 @@ class BookcasePageTest {
         assertEquals(3, rowIds.size)
     }
 
+    /**
+     * The row ids the app acts on are the ones the page's own 移除 controls navigate to.
+     *
+     * Removal is a `bookcase.php?delid={bid}` GET built from the checkbox value (see
+     * `Wenku8Source.removeFromOnlineShelf`), so this asserts the two agree on the real
+     * markup rather than trusting the `readbookcase.php?…&bid=` link to be the same number.
+     */
     @Test
-    fun `reads the bulk action form off the page`() {
-        val form = Wenku8Parser.parseBookcaseActionForm(page)
+    fun `the row ids match the rows' own delid controls`() {
+        val rowIds = Wenku8Parser.parseBookcaseRowIds(page)
 
-        assertNotNull("the footer form must be found", form)
-        // `action=""` means "post back here"; it must not resolve to nothing.
-        assertEquals(Wenku8Urls.BOOKCASE, form!!.action)
-        assertEquals("checkid[]", form.selectionField)
-        assertEquals("newclassid", form.actionField)
-        assertEquals("btnsubmit", form.submitField)
-        assertEquals("-1", Wenku8Selectors.BOOKCASE_CLASS_REMOVE)
-        // `clsssid` is the group the page is showing and has to be posted back.
-        assertEquals("0", form.hidden["clsssid"])
-        // The group switcher is a navigation control, not part of the action.
-        assertTrue("classlist must not be submitted", "classlist" !in form.hidden)
+        val delids = DELID.findAll(page).map { it.groupValues[1] }.toSet()
+
+        assertEquals(delids, rowIds.values.toSet())
     }
 
     @Test
@@ -162,10 +161,8 @@ class BookcasePageTest {
         assertEquals(3, summary.inGroup)
     }
 
-    @Test
-    fun `a page without the footer form is reported rather than guessed at`() {
-        val stripped = page.replace("newclassid", "somethingelse")
-
-        assertEquals(null, Wenku8Parser.parseBookcaseActionForm(stripped))
+    private companion object {
+        /** The `delid=` in each row's 移除 control. */
+        val DELID = Regex("""bookcase\.php\?delid=(\d+)""")
     }
 }

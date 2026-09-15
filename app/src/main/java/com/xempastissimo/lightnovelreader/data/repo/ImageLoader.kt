@@ -35,7 +35,7 @@ class ImageLoader(
         val key = cacheKey(url, maxWidth)
         memory.get(key)?.let { return it }
 
-        val cached = readFromDisk(key)
+        val cached = readFromDisk(key, maxWidth)
         if (cached != null) {
             memory.put(key, cached)
             return cached
@@ -85,12 +85,20 @@ class ImageLoader(
         return runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) }.getOrNull()
     }
 
-    private fun readFromDisk(key: String): Bitmap? {
+    /**
+     * A cached image, decoded at the width it is about to be *remembered* at.
+     *
+     * The width has to be passed on: the memory cache is keyed by (url, width), so a cover
+     * decoded at full size and then filed under the thumbnail's key would occupy the heap —
+     * and the LRU's accounting — as the original plate for the rest of the session, once per
+     * distinct cover on screen.
+     */
+    private fun readFromDisk(key: String, maxWidth: Int): Bitmap? {
         val file = File(cacheDir, key)
         if (!file.exists() || file.length() == 0L) return null
         return runCatching {
             val bytes = file.readBytes()
-            decode(bytes, 0)
+            decode(bytes, maxWidth)
         }.getOrNull()
     }
 

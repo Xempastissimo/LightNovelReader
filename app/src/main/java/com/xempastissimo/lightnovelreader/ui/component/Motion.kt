@@ -2,14 +2,20 @@ package com.xempastissimo.lightnovelreader.ui.component
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +48,9 @@ object Motion {
 
     /** A settle meant to be noticed rather than merely tolerated. */
     const val SLOW_MILLIS = 320
+
+    /** Duration for rotation animation (refresh icon). */
+    const val ROTATION_MILLIS = 1000
 }
 
 /**
@@ -189,6 +198,41 @@ fun StaggeredEntrance(
             ),
         ),
         modifier = modifier,
+    ) {
+        content()
+    }
+}
+
+/**
+ * A rotating icon that spins while [isRefreshing] is true.
+ *
+ * Used for refresh buttons to provide visual feedback during loading.
+ * The rotation is smooth and continuous, using the app's motion vocabulary.
+ */
+@Composable
+fun RotatingIcon(
+    isRefreshing: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "rotating-icon")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = Motion.ROTATION_MILLIS,
+                easing = LinearEasing,
+            ),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "rotation",
+    )
+
+    Box(
+        modifier = modifier.graphicsLayer {
+            rotationZ = if (isRefreshing) rotation else 0f
+        },
     ) {
         content()
     }

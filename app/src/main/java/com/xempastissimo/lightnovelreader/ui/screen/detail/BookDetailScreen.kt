@@ -72,6 +72,7 @@ import com.xempastissimo.lightnovelreader.ui.component.CoverImage
 import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
+import com.xempastissimo.lightnovelreader.ui.component.RotatingIcon
 import com.xempastissimo.lightnovelreader.ui.component.pressHighlight
 import com.xempastissimo.lightnovelreader.ui.theme.LightNovelReaderTheme
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
@@ -539,7 +540,9 @@ fun BookDetailContent(
             },
             actions = {
                 IconButton(onClick = actions.onRefresh) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                    RotatingIcon(isRefreshing = state.loading) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                    }
                 }
                 IconButton(onClick = actions.onToggleShelf) {
                     if (state.onShelf) {

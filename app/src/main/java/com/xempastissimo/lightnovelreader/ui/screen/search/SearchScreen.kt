@@ -22,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,6 +33,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.lerp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -48,6 +52,7 @@ import com.xempastissimo.lightnovelreader.ui.component.EmptyBox
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
+import com.xempastissimo.lightnovelreader.ui.component.Motion
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -169,10 +174,25 @@ fun SearchScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SearchField.entries.forEach { field ->
+                val isSelected = state.field == field
+                val labelColor by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    animationSpec = tween(durationMillis = Motion.ENTER_MILLIS),
+                    label = "filterChipLabel",
+                )
                 FilterChip(
-                    selected = state.field == field,
+                    selected = isSelected,
                     onClick = { viewModel.onFieldChange(field) },
-                    label = { Text(if (field == SearchField.TITLE) "按标题" else "按作者") },
+                    label = { 
+                        Text(
+                            text = if (field == SearchField.TITLE) "按标题" else "按作者",
+                            color = labelColor
+                        ) 
+                    },
                 )
             }
         }
@@ -253,12 +273,16 @@ fun SearchScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text("搜索历史", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                text = "清空",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(4.dp),
-                            )
+                            TextButton(
+                                onClick = { viewModel.clearHistory() },
+                                modifier = Modifier.padding(0.dp),
+                            ) {
+                                Text(
+                                    text = "清空",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
                         }
                         androidx.compose.foundation.layout.FlowRow(
                             modifier = Modifier.padding(horizontal = 16.dp),
@@ -275,7 +299,7 @@ fun SearchScreen(
                     } else {
                         EmptyBox(
                             title = "搜索轻小说",
-                            hint = "支持按标题或作者搜索；也可直接在书架页输入书籍 ID",
+                            hint = "支持按标题或作者搜索",
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(top = 60.dp),

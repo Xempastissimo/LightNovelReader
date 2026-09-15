@@ -1,6 +1,7 @@
 package com.xempastissimo.lightnovelreader.data.repo
 
 import com.xempastissimo.lightnovelreader.domain.model.Bookmark
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,6 +57,27 @@ class BookmarkStoreTest {
         assertEquals(3, restored.paragraphIndex)
         assertEquals("第一段的开头。", restored.excerpt)
         assertEquals(CREATED_AT, restored.createdAt)
+    }
+
+    /**
+     * A newly constructed store already holds the file's rows, with no `load()` call.
+     *
+     * Regression: nothing loaded the store in the app, so every process started with an empty
+     * list and the first add or delete rewrote the file from that emptiness — the bookmarks a
+     * user had made were gone after a restart, silently and permanently.
+     */
+    @Test
+    fun `a freshly constructed store reads the file it is given`() {
+        store().let { writer ->
+            runBlocking { writer.add(bookmark(chapterId = 555, paragraphIndex = 9)) }
+        }
+
+        val constructed = store()
+
+        assertEquals(1, constructed.bookmarks.value.size)
+        val restored = constructed.bookmarks.value.single()
+        assertEquals(555, restored.chapterId)
+        assertEquals(9, restored.paragraphIndex)
     }
 
     @Test

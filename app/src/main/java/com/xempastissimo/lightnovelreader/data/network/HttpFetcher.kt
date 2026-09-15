@@ -89,8 +89,14 @@ interface HttpFetcher {
     /**
      * Posts a form as a field list, where a name may appear more than once.
      *
-     * HTML forms allow repetition and the bookshelf needs it: its bulk action sends
-     * `checkid[]` once per ticked book, which a `Map` cannot express.
+     * HTML forms allow repetition, and the one case in this app that needed it was the
+     * bookshelf's bulk action (`checkid[]` once per ticked book, which a `Map` cannot
+     * express). That action is no longer used: it can only be submitted as a POST, and the
+     * site answers this app's POST channel with 403 — see
+     * `Wenku8Source.removeFromOnlineShelf`. The overload is kept because it is the correct
+     * shape for any *future* repeated-field form, and because `BrowserBackedFetcher` routes
+     * both overloads to the native client — the fact that is easy to get wrong and that the
+     * regression test now watches.
      */
     suspend fun postForm(
         url: String,
@@ -222,9 +228,9 @@ class HttpUrlConnectionFetcher(
                     val retryAfterHeader = connection.headerFields?.entries
                         ?.firstOrNull { it.key.equals("Retry-After", ignoreCase = true) }
                         ?.value?.firstOrNull()
-                    connection.errorStream?.close()
 
                     if (status == 429) {
+                        connection.errorStream?.close()
                         // The source's limit is per client, so pause everything, not
                         // just this request. Sibling requests would otherwise keep the
                         // limit tripped.
@@ -239,6 +245,19 @@ class HttpUrlConnectionFetcher(
                             status,
                             "书源限流（429）：请求过于频繁，已暂停 " +
                                 "${rateLimiter.cooldownRemainingMillis() / 1000} 秒后自动恢复",
+                        )
+                    }
+
+                    // A 403 from this source is its bot protection, not a rate limit:
+                    // the fingerprint check fails no matter how long we wait, so backing
+                    // off three times (1.5s + 3s + 6s) only delays a failure that is
+                    // already certain — and tells the user to "lower the request rate"
+                    // when the thing that would actually help is a browser check.
+                    val body = connection.errorStream?.use { it.readAllBytes() }
+                    val page = body?.let { CharsetCodec.decode(it, null) }
+                    if (page != null && looksLikeChallenge(page)) {
+                        throw HttpFailure.Challenge(
+                            "书源要求浏览器校验（Cloudflare），请先在浏览器中完成验证",
                         )
                     }
 
@@ -350,19 +369,15 @@ class HttpUrlConnectionFetcher(
             lower.contains("javascript")
     }
 
+    private fun encode(value: String, charset: Charset): String =
+        URLEncoder.encode(value, charset.name())
+
     private fun guardAgainstChallenge(body: String) {
         if (body.length > CHALLENGE_SCAN_LIMIT) return
-        val lower = body.lowercase()
-        val looksLikeChallenge = (
-            lower.contains("cf-browser-verification") ||
-                lower.contains("cf_chl_opt") ||
-                lower.contains("just a moment") ||
-                lower.contains("checking your browser") ||
-                lower.contains("enable javascript and cookies to continue")
-            )
-        if (looksLikeChallenge) {
+        if (looksLikeChallenge(body)) {
             throw HttpFailure.Challenge("书源要求浏览器校验（Cloudflare），请先在浏览器中完成验证")
         }
+        val lower = body.lowercase()
         val isLoginPage = lower.contains("用户登录") &&
             lower.contains("password") &&
             lower.contains("login.php")
@@ -371,13 +386,27 @@ class HttpUrlConnectionFetcher(
         }
     }
 
-    private fun encode(value: String, charset: Charset): String =
-        URLEncoder.encode(value, charset.name())
-
     companion object {
         const val DEFAULT_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/125.0.0.0 Mobile Safari/537.36"
+
+        /**
+         * Whether a body is the site's bot-check interstitial rather than a page.
+         *
+         * Size is deliberately not part of the test: the live interstitial is ~28 KB, so a
+         * "too small to be real" heuristic misses it entirely. The markers are the site's
+         * own script names.
+         */
+        fun looksLikeChallenge(body: String): Boolean {
+            if (body.isBlank()) return false
+            val lower = body.lowercase()
+            return lower.contains("cf-browser-verification") ||
+                lower.contains("cf_chl_opt") ||
+                lower.contains("just a moment") ||
+                lower.contains("checking your browser") ||
+                lower.contains("enable javascript and cookies to continue")
+        }
 
         private const val CHALLENGE_SCAN_LIMIT = 200_000
         private const val LOGIN_PAGE_SCAN_LIMIT = 60_000

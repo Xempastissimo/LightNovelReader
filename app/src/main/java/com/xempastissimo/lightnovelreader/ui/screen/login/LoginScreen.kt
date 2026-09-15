@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -213,7 +214,16 @@ fun LoginScreen(
                 enabled = !state.submitting,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (state.submitting) "登录中…" else "登录")
+                if (state.submitting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.padding(end = 8.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                    Text("登录中…")
+                } else {
+                    Text("登录")
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.xempastissimo.lightnovelreader.ui.screen.shelf
 
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -352,8 +353,9 @@ class ShelfViewModel(
         metadataBackfillJob = viewModelScope.launch {
             var filled = 0
             for (bookId in pending) {
-                // Recorded before the attempt, not after: a book the site has no cover for
-                // would otherwise be asked about again on every pass, forever.
+                // Recorded before the attempt, not after: a book whose page carries neither
+                // 文库分类 nor 最后更新 still satisfies `needsFullerMetadata`, and asking about
+                // it once per sync pass within this session would be pure noise.
                 metadataAttempted += bookId
                 val summary = runCatching { bookRepository.bookSummary(bookId) }.getOrNull() ?: break
                 shelfRepository.updateBook(summary)
@@ -368,13 +370,19 @@ class ShelfViewModel(
     /**
      * Whether a row is still only what the bookshelf page could say about it.
      *
-     * The test is the *absence of everything the detail page adds*, not the absence of a
-     * cover alone: some books genuinely have no cover on the site, and keying on the cover
-     * would retry those forever. Once a book has a 文库分类 or an 更新日期 the app has read
-     * its own page, and there is nothing more to learn.
+     * The test is the absence of the fields the *detail page* adds — 文库分类 and 最后更新 —
+     * and deliberately **not** the absence of a cover. The site publishes books without a
+     * cover, and a cover is never something the detail page can conjure for them, so keying
+     * on it made those books "still unknown" after every successful read: because
+     * [metadataAttempted] lives in memory, each new process would spend its
+     * [MAX_METADATA_BACKFILL] requests on the same covers-less books again, forever.
+     *
+     * 文库分类 and 最后更新 are on every real detail page, so their presence is a reliable
+     * "this app has already read that page" mark — and unlike a persisted marker, it needs
+     * no extra field in `shelf.json`.
      */
     private fun Book.needsFullerMetadata(): Boolean =
-        coverUrl.isNullOrBlank() && category.isBlank() && updatedAt.isBlank()
+        category.isBlank() && updatedAt.isBlank() && latestChapter.isBlank()
 
     // ------------------------------------------------------------------ selection
 
@@ -413,7 +421,14 @@ class ShelfViewModel(
             return
         }
         viewModelScope.launch {
-            runCatching { source.removeFromOnlineShelf(bookIds) }
+            val removalResult = runCatching { source.removeFromOnlineShelf(bookIds) }
+            val removalAccepted = removalResult.getOrElse { false }
+            
+            if (removalResult.isFailure) {
+                Log.w(TAG, "removeFromOnlineShelf failed for $bookIds", removalResult.exceptionOrNull())
+            } else {
+                Log.d(TAG, "removeFromOnlineShelf($bookIds) accepted=$removalAccepted")
+            }
 
             val reloaded = runCatching { source.onlineShelf() }.getOrNull()
             val stillOnShelf = reloaded?.entries?.mapTo(HashSet()) { it.book.bookId }.orEmpty()
@@ -442,6 +457,8 @@ class ShelfViewModel(
                     onlineCapacity = reloaded?.capacity ?: it.onlineCapacity,
                     siteTotalCount = reloaded?.totalCount ?: it.siteTotalCount,
                     message = when {
+                        removalResult.isFailure -> "移除请求失败：${removalResult.exceptionOrNull()?.message ?: "未知错误"}"
+                        !removalAccepted -> "站点拒绝了移除请求"
                         reloaded == null -> "已发出移除请求，但书架重新同步失败，可稍后手动刷新"
                         removed.isEmpty() -> "站点没有移除任何书目，书架未变化"
                         removed.size == bookIds.size -> "已从站点在线书架移除 ${removed.size} 本"
@@ -494,6 +511,8 @@ class ShelfViewModel(
     }
 
     companion object {
+        private const val TAG = "ShelfViewModel"
+        
         /**
          * How many books one metadata backfill pass may read.
          *
@@ -572,6 +591,7 @@ fun ShelfScreen(
                 onRemove = viewModel::remove,
                 onDeleteOffline = viewModel::deleteOffline,
                 onDeleteDownloaded = viewModel::deleteDownloaded,
+                offlineSizeBytes = { bookId -> state.offline[bookId]?.sizeBytes ?: 0L },
                 onOpenBook = onOpenBook,
                 onContinueReading = onContinueReading,
                 onOpenSearch = onOpenSearch,

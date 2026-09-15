@@ -99,6 +99,32 @@ class BookRepositorySummaryTest {
         assertEquals("第一本", repository.summary(1)?.title)
         assertNull(repository.summary(2))
     }
+
+    /**
+     * The read-detail cache is bounded, and it drops the book used longest ago.
+     *
+     * Both halves matter: unbounded it would hold every chapter tree opened in a session, and
+     * evicting at random would eventually discard the book the reader keeps coming back to.
+     */
+    @Test
+    fun `the detail cache is bounded and evicts the least recently used book`() = runTest {
+        val repository = repository()
+        repeat(8) { index -> repository.detail(bookId = index + 1) }
+
+        // Using book 1 again makes book 2 the least recently used one.
+        repository.detail(bookId = 1)
+        repository.detail(bookId = 9)
+
+        val callsBeforeReloadingBook1 = source.detailCalls
+        repository.detail(bookId = 1)
+        assertEquals(callsBeforeReloadingBook1, source.detailCalls)
+
+        repository.detail(bookId = 2)
+        // Eight reads filled the cache, reading book 9 evicted the least recently used one —
+        // book 2 — and re-reading it is the only extra page load. So the cache holds a bounded
+        // number of chapter trees rather than every one opened in the session.
+        assertEquals(10, source.detailCalls)
+    }
 }
 
 /** The smallest source that can answer what the summary hand-off asks of it. */

@@ -145,23 +145,11 @@ object Wenku8Selectors {
     /**
      * The row checkbox, `name="checkid[]"`.
      *
-     * Its `value` is the row's own id on the bookshelf, which is **not** the book id this
-     * app uses everywhere else (see [Wenku8Urls.removeFromBookcase]).
+     * Its `value` is the row's own id on the bookshelf — the `bid` that
+     * `bookcase.php?delid=…` accepts — and that is **not** the book id this app uses
+     * everywhere else (see [Wenku8Urls.removeFromBookcase]).
      */
     const val BOOKCASE_ROW_CHECKBOX_NAME = "checkid"
-
-    /**
-     * The bulk-action dropdown in the page footer: `选中项目 [下拉框] 确认`.
-     *
-     * Worth stating plainly, because guessing here cost two rounds: the bookshelf has no
-     * per-row delete *link*. The 移除 control is a `javascript:` `document.location`
-     * call, and the footer is a real `<form>` — so removal has to be driven from the ids
-     * read off this page, never from a constructed link.
-     */
-    const val BOOKCASE_ACTION_SELECT_NAME = "newclassid"
-
-    /** `newclassid` value meaning "move the ticked books off the bookshelf". */
-    const val BOOKCASE_CLASS_REMOVE = "-1"
 
     /** `aid=(\d+)` inside a bookcase link. */
     val BOOKCASE_AID = Regex("""[?&]aid=(\d+)""")

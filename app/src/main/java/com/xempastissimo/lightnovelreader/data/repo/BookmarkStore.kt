@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -38,7 +39,27 @@ class BookmarkStore(
     private val mutex = Mutex()
     private val _bookmarks = MutableStateFlow<List<Bookmark>>(emptyList())
 
-    /** Every bookmark in the app, newest first. */
+    /**
+     * The store reads its own file as it is constructed.
+     *
+     * [load] *replaces* the in-memory list, so a store whose first act was a write would drop
+     * everything already on disk — and because the file is only ever rewritten from memory,
+     * getting that wrong is silent rather than loud. Nothing outside this class can be trusted
+     * to remember to load it first, so it loads itself (the same call `CookieStore` makes in
+     * its constructor). The document is a handful of rows, so the read is not worth deferring.
+     */
+    init {
+        runBlocking(Dispatchers.IO) { load() }
+    }
+
+    /**
+     * Every bookmark in the app, newest first.
+     *
+     * The file is read as this class is constructed (see the `init` block below), because
+     * [load] *replaces* the in-memory list: a store whose first act was a write would drop
+     * everything already on disk, and since the file is only ever rewritten from memory that
+     * failure is silent rather than loud.
+     */
     val bookmarks: StateFlow<List<Bookmark>> = _bookmarks.asStateFlow()
 
     suspend fun load() = withContext(Dispatchers.IO) {

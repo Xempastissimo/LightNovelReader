@@ -95,11 +95,26 @@ class CookieStore(
      * Parses a raw `a=1; b=2` cookie header (as returned by `CookieManager`) and
      * merges it into the jar for [domain].
      *
+     * A *merge* rather than a replacement, and that distinction is the whole point of the
+     * method: the callers read the cookie header of one URL at a time, and a site's cookie
+     * header is not always the same set from one URL to the next. Replacing the domain each
+     * time therefore deleted cookies that were just imported successfully — importing
+     * `www.wenku8.net` and then the bare `wenku8.net` (which answers with a subset) wiped
+     * the session the first import had established, and pasting only `PHPSESSID` by hand
+     * deleted the `jieqiUserInfo` the user already had. Only cookies this header actually
+     * carries are written, so nothing is lost by importing.
+     *
      * The session cookies the site issues are domain-scoped and not `hostOnly`,
      * so a value read back for `wenku8.net` must stay reachable from
      * `www.wenku8.net` — hence [hostOnly] is false here.
      */
     fun importRawCookieHeader(raw: String, domain: String = DEFAULT_DOMAIN) {
+        val pairs = parseCookieHeader(raw)
+        if (pairs.isNotEmpty()) mergeForDomain(pairs, domain)
+    }
+
+    /** `a=1; b=2` -> ordered pairs; malformed parts are dropped, not guessed at. */
+    fun parseCookieHeader(raw: String): Map<String, String> {
         val pairs = LinkedHashMap<String, String>()
         for (part in raw.split(';')) {
             val trimmed = part.trim()
@@ -108,7 +123,23 @@ class CookieStore(
             if (eq <= 0) continue
             pairs[trimmed.substring(0, eq).trim()] = trimmed.substring(eq + 1).trim()
         }
-        if (pairs.isNotEmpty()) replaceForDomain(pairs, domain)
+        return pairs
+    }
+
+    /**
+     * Writes the named cookies for [domain], leaving every other cookie of that domain
+     * alone — the operation a paste or a WebView harvest actually wants.
+     */
+    fun mergeForDomain(raw: Map<String, String>, domain: String = DEFAULT_DOMAIN) {
+        lock.withLock {
+            val normalised = domain.removePrefix(".").lowercase()
+            for ((name, value) in raw) {
+                if (name.isBlank()) continue
+                cookies[key(name, normalised, "/")] =
+                    Cookie(name, value, normalised, "/", expiresAt = SESSION_COOKIE_EXPIRY, hostOnly = false)
+            }
+            persistLocked()
+        }
     }
 
     fun snapshot(): Map<String, String> = lock.withLock {

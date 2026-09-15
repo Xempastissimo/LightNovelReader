@@ -122,16 +122,23 @@ class CookieStoreTest {
         assertEquals(5, store.snapshot().size)
     }
 
+    /**
+     * A re-import *updates* the cookies it carries and leaves the rest of the domain alone.
+     *
+     * It used to replace the whole domain, which quietly logged the user out: `CookieManager`
+     * answers with a different set per URL, so importing `www.wenku8.net` and then the bare
+     * `wenku8.net` (a subset) deleted the session the first import had just established, and
+     * pasting only `PHPSESSID` by hand deleted the `jieqiUserInfo` beside it.
+     */
     @Test
-    fun `re-importing the same domain replaces that domain's set`() {
-        // A `CookieManager` header is the complete set for its domain, so a
-        // second import legitimately drops cookies the first one had.
+    fun `re-importing the same domain updates its cookies without dropping the others`() {
         val store = store()
-        store.importRawCookieHeader("PHPSESSID=old; stale=1", "www.wenku8.net")
+        store.importRawCookieHeader("PHPSESSID=old; jieqiUserInfo=keep", "www.wenku8.net")
         store.importRawCookieHeader("PHPSESSID=new", "www.wenku8.net")
         val header = store.headerFor("https://www.wenku8.net/index.php")!!
         assertTrue(header.contains("PHPSESSID=new"))
-        assertFalse(header.contains("stale=1"))
+        assertTrue(header.contains("jieqiUserInfo=keep"))
+        assertTrue(store.isLoggedIn())
     }
 
     @Test

@@ -29,6 +29,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.xempastissimo.lightnovelreader.ui.LocalAppContainer
 import com.xempastissimo.lightnovelreader.ui.theme.LightNovelReaderTheme
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import com.xempastissimo.lightnovelreader.ui.component.Motion
 
 /**
  * Cover thumbnail loaded through the app's own [com.xempastissimo.lightnovelreader.data.repo.ImageLoader].
@@ -68,22 +71,41 @@ fun CoverImage(
         contentAlignment = Alignment.Center,
     ) {
         val image = bitmap
-        when {
-            image != null -> Image(
-                bitmap = image,
-                contentDescription = title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
+        val state = when {
+            image != null -> CoverImageState.LOADED
+            failed -> CoverImageState.FAILED
+            else -> CoverImageState.LOADING
+        }
+        
+        Crossfade(
+            targetState = state,
+            animationSpec = tween(durationMillis = Motion.ENTER_MILLIS),
+            label = "cover-image-transition",
+        ) { currentState ->
+            when (currentState) {
+                CoverImageState.LOADED -> Image(
+                    bitmap = image!!,
+                    contentDescription = title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
 
-            failed -> CoverPlaceholder(title)
+                CoverImageState.FAILED -> CoverPlaceholder(title)
 
-            else -> CircularProgressIndicator(
-                modifier = Modifier.padding(8.dp),
-                strokeWidth = 2.dp,
-            )
+                CoverImageState.LOADING -> CircularProgressIndicator(
+                    modifier = Modifier.padding(8.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
         }
     }
+}
+
+/** States for cover image loading animation. */
+private enum class CoverImageState {
+    LOADING,
+    LOADED,
+    FAILED
 }
 
 /** Draws the first character of the title, which is a readable stand-in for a cover. */

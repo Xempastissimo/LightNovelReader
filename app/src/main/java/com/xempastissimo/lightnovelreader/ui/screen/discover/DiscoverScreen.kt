@@ -49,6 +49,7 @@ import com.xempastissimo.lightnovelreader.ui.component.LoadMoreIndicator
 import com.xempastissimo.lightnovelreader.ui.component.LoadingBox
 import com.xempastissimo.lightnovelreader.ui.component.StaggeredEntrance
 import com.xempastissimo.lightnovelreader.ui.component.StateCrossfade
+import com.xempastissimo.lightnovelreader.ui.component.RotatingIcon
 import com.xempastissimo.lightnovelreader.ui.toUserMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -356,7 +357,9 @@ fun DiscoverScreen(
                     Icon(Icons.Filled.Search, contentDescription = "搜索")
                 }
                 IconButton(onClick = viewModel::refresh) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                    RotatingIcon(isRefreshing = state.tabState(state.tab).loading) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                    }
                 }
             },
         )

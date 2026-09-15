@@ -346,12 +346,24 @@ class Wenku8Source(
      * Two facts about the live page shape this:
      *
      * - there is no per-row delete *link*. The 移除 control is a `javascript:`
-     *   `document.location` call and the footer is a real `<form>`, so the removal has to
-     *   be driven from the ids read off the page — constructing a link is what made the
-     *   earlier implementation a silent no-op;
+     *   `document.location` call, so the removal has to be driven from the ids read off the
+     *   page — constructing a link is what made the earlier implementation a silent no-op;
      * - the bookshelf identifies a row by its own `bid`, which is a *different* number
      *   from the `aid` this app uses as a book id. Only `bid` is accepted, so the pairing
      *   is read from the page's checkboxes first.
+     *
+     * **Every** removal — one book or ten — is the row's own `bookcase.php?delid={bid}` GET.
+     * The page's bulk form would be one request instead of N, but it can only be submitted as
+     * a POST, and this app's POST channel is the plain `HttpURLConnection` client that the site
+     * answers with `403` (Cloudflare checks the TLS fingerprint — see README §8.1). That is
+     * exactly the bug this replaced: picking several rows and deleting them reported
+     * 「书源拒绝访问（403）」 while deleting one row worked, because only the single-book path
+     * used a GET. Removing *one* row at a time is a request shape the site accepts, and it is
+     * the same operation its own 移除 control performs.
+     *
+     * Sequential, like everything else against this source: every request goes through the
+     * shared [RateLimiter], so removing several books is deliberately slower than the site's
+     * own bulk form would be.
      */
     override suspend fun removeFromOnlineShelf(bookIds: Collection<Int>): Boolean = requireLogin {
         if (bookIds.isEmpty()) return@requireLogin true
@@ -361,25 +373,16 @@ class Wenku8Source(
         val shelfIds = bookIds.mapNotNull { rowIds[it] }
         if (shelfIds.isEmpty()) return@requireLogin false
 
-        if (shelfIds.size == 1) {
+        var allAccepted = true
+        for (shelfId in shelfIds) {
             // Exactly where that row's own 移除 control navigates.
             val response = http.getText(
-                Wenku8Urls.removeFromBookcase(shelfIds.single()),
+                Wenku8Urls.removeFromBookcase(shelfId),
                 referer = Wenku8Urls.BOOKCASE,
             )
-            return@requireLogin accepted(response)
+            if (!accepted(response)) allAccepted = false
         }
-
-        // Several at once: submit the page's own bulk form, with `checkid[]` repeated.
-        val form = Wenku8Parser.parseBookcaseActionForm(html) ?: return@requireLogin false
-        val fields = ArrayList<Pair<String, String>>(shelfIds.size + form.hidden.size + 2)
-        form.hidden.forEach { (name, value) -> fields.add(name to value) }
-        shelfIds.forEach { fields.add(form.selectionField to it) }
-        fields.add(form.actionField to Wenku8Selectors.BOOKCASE_CLASS_REMOVE)
-        form.submitField?.let { fields.add(it to form.submitValue) }
-
-        val response = http.postForm(form.action, fields, referer = Wenku8Urls.BOOKCASE)
-        accepted(response)
+        allAccepted
     }
 
     /**

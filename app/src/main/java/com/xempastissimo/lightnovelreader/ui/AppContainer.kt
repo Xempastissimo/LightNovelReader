@@ -114,7 +114,12 @@ class AppContainer(private val context: Context) {
         )
     }
 
-    /** Reads the local library from disk; safe to call once per process. */
+    /**
+     * Reads the local library from disk; safe to call once per process.
+     *
+     * The bookmarks are not here: `BookmarkStore` reads its own file as it is constructed, so
+     * that its state cannot depend on a caller remembering to warm it up (see [BookmarkStore]).
+     */
     fun warmUp() {
         appScope.launch {
             shelfRepository.load()

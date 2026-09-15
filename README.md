@@ -71,7 +71,7 @@
 ```bash
 .\gradlew.bat assembleDebug          # 构建 debug APK
 .\gradlew.bat installDebug           # 安装到已连接设备/模拟器
-.\gradlew.bat test                   # JVM 单元测试（261 个）
+.\gradlew.bat test                   # JVM 单元测试（266 个）
 .\gradlew.bat connectedAndroidTest   # 设备测试（8 个）
 ```
 
@@ -181,7 +181,7 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 | 在线书架 | `/modules/article/bookcase.php` |
 | 书架分组 | `?classid=1` … `?classid=5`（连同默认组共 6 组）。**app 暂不呈现分组**，只读写默认组；页头的总数涵盖全部分组，所以计数是全账号的，只有列表是默认组的 |
 | **移出一本** | `/modules/article/bookcase.php?delid={shelfId}` —— 页面每行的「移除」就是这个地址（`document.location` 写在 `javascript:` href 里）。**`shelfId` 不是书籍 id**，见「两个 id」 |
-| **批量移出** | 提交页面自带的 `<form action="" method="post" id="checkform">`：`checkid[]`（每个勾选项的 `shelfId` 各出现一次）+ `newclassid=-1`（`-1`＝移出书架，`0`～`5`＝移到分组）+ 表单隐藏字段 `clsssid` + 提交按钮 `btnsubmit`。字段名全部从页面读出，不写死 |
+| **批量移出** | **与单本同一条路径**：每一行各发一次 `bookcase.php?delid={shelfId}`。页面自带一个 `<form method="post">`（`checkid[]` + `newclassid=-1` + 隐藏字段 `clsssid` + `btnsubmit`）能用一次请求移出多本，但**只能用 POST 提交**，而 app 的 POST 通道是会被站点 403 的原生 `HttpURLConnection`（见 §8.1）——曾经正是它让「多选删除」报「书源拒绝访问（403）」而单本删除正常。现在不再使用该表单 |
 | 加入书架 | `/modules/article/addbookcase.php?bid={aid}` —— 这里的 `bid` **就是书籍 id**，与移出时的同名字段含义不同；先取页面自身的 `a[href*=addbookcase]`，取不到才退回该地址 |
 | 登录 | `/login.php?do=submit&jumpurl=...` |
 | 书架上限 | 页头写着「您的书架可收藏 300 本」，由站点强制；`Wenku8Source.MAX_BOOKCASE_BOOKS` 只是页头读不到时的兜底 |
@@ -210,7 +210,7 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 | 在线书架 | `a[href*=readbookcase]`（`?aid=&bid=[&cid=]`） | `cid` 出现时该链接是最新章节 |
 | 书架条目行 | 同时含 `input[name^=checkid]` 与 `a[href*=readbookcase]` 的**最近祖先**（即 `<tr>`） | 两个条件缺一不可：只看 `readbookcase` 会停在标题所在的 `<td>`（**里面没有作者**，这就是书架作者一直为空的原因），只看复选框会停在复选框自己的 `<td>` |
 | 书架页头 | `div.gridtop` 的文本 | `您的书架可收藏 300 本，已收藏 3 本，本组有 3 本。` —— 真实总数只在这里 |
-| 书架批量操作 | `select[name=newclassid]` 所在 `<form>` | `checkid[]`＝各行复选框的 `value`，`newclassid=-1` 表示移出书架 |
+| 书架行 id | 行内复选框的 `value`，并与该行「移除」控件里的 `delid=` 对照 | 两者必须是同一个数字（`BookcasePageTest` 用真实页面断言这一点），删除请求就按它构造 |
 | 分页 | `div.pages` | |
 
 #### 在线书架没有封面（书架行的元信息要合并，不能覆盖）
@@ -220,8 +220,8 @@ Compose Screen ──> ViewModel ──> Repository ──> BookSource(Wenku8) �
 后果有两条，都已修：
 
 - **同步不能整行覆盖**。`ShelfRepository.replaceOnlineEntries` 早先用站点那一行直接替换本地行，于是「打开过详情页、已经有封面」的书会在下一次同步时丢掉封面、文库和日期。现在改为 `book.mergeInto(existing)`：站点有值的字段以站点为准（书名、最新章节），站点没提的字段保留本地已有的。
-- **没打开过的书要补一次详情页**。`ShelfViewModel.backfillMissingMetadata` 在一次成功的书架同步之后，对「既没有封面、也没有文库分类和更新日期」的行各读一次 `BookSource.bookSummary`（只取 `/book/{aid}.htm`，**不读目录**），把结果落盘。它串行、受 `RateLimiter` 限速、每次最多 8 本、遇到第一个失败就停下（质询或掉登录会让后面每一本都以同样方式失败），并且会跳过本次会话里已经问过的书。
-  判定条件是「详情页能补的字段**全都没有**」，而不是「没有封面」——站点确实有书没封面，只看封面会永远重试。
+- **没打开过的书要补一次详情页**。`ShelfViewModel.backfillMissingMetadata` 在一次成功的书架同步之后，对「既没有文库分类、也没有更新日期、也没有最新章节」的行各读一次 `BookSource.bookSummary`（只取 `/book/{aid}.htm`，**不读目录**），把结果落盘。它串行、受 `RateLimiter` 限速、每次最多 8 本、遇到第一个失败就停下（质询或掉登录会让后面每一本都以同样方式失败），并且会跳过本次会话里已经问过的书。
+  判定条件用的是「详情页一定会带、而书架页一定没有」的字段（文库分类 / 更新日期 / 最新章节），**不是「没有封面」**：站点确实有书没封面，而封面不是详情页能补出来的东西，按封面判定会让这些书在每次冷启动都重新花掉 8 次请求，永远补不完。
 
 #### 两个 id（踩过两次的坑）
 
@@ -245,7 +245,7 @@ app 内部一律用书籍 id（`Book.bookId`）。移出书架只接受**书架 
 
 ## 8. 抓取策略与边界
 
-- **串行 + 限速**：所有请求经过一个 `RateLimiter`，最小间隔 900ms，`429/403/5xx` 指数退避后重试，最多 3 次。
+- **串行 + 限速**：所有请求经过一个 `RateLimiter`，最小间隔 900ms，`429/5xx` 指数退避后重试，最多 3 次。**`403` 且是 Cloudflare 质询时不重试**：指纹检查不会因为等一会儿就通过，退避三次（1.5s + 3s + 6s）只是把一个必然的失败推迟 10 秒，还会把用户往「降低请求频率」上引——真正有用的是去做一次浏览器校验，所以直接抛 `HttpFailure.Challenge`（`HttpUrlConnectionFetcher.looksLikeChallenge`，判定只看站点自己的脚本名，不看体积：真实质询页有 ~28KB）。不是质询的 403 仍按原样退避重试。
 - **批量下载是串行的**：`BookRepository.downloadBook` 逐章下载并回报进度，不做并发抓取。
 - **相邻章节的预加载不额外增加请求量**：阅读器在一章读出来后取它的**下一章**（已缓存的跳过），所以「从头读到尾」的总请求数与本功能之前完全相同——每章仍然只取一次，只是提前了。**上一章只在本章开头（第一页）时才取**：读到本章第 9 页的人不会往回翻，那时取上一章才是站点本不必承担的一次页面加载。预取走同一个 `RateLimiter`，串行、限速；失败完全静默，不会在正在读的页面上弹错误。
 - **不做风控绕过**：站点对普通 HTTP 客户端返回 Cloudflare 质询（响应头 `cf-mitigated: challenge`）。
@@ -309,7 +309,7 @@ filesDir/library/{bookId}/{chapterId}.json    ← 同一批章节也导入到逐
 
 ## 9. 测试
 
-### JVM 单元测试（`app/src/test`，261 个）
+### JVM 单元测试（`app/src/test`，266 个）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -321,12 +321,14 @@ filesDir/library/{bookId}/{chapterId}.json    ← 同一批章节也导入到逐
 | `data/network/RefreshThrottleTest` | 刷新按钮的限速窗口：首次必过、窗口内丢弃、窗口过后放行、连点保持 2 秒下限而不被推迟（假时钟） |
 | `data/source/wenku8/Wenku8ParserTest` | 详情元信息、卷章目录、正文分块、插图与导航、登录墙识别、榜单/搜索条目（含封面取哪张）、书架、最近更新解析、封面推导、URL 工具 |
 | `data/source/wenku8/Wenku8PackParserTest` | 打包文本的行扫描与字节切片、UTF-8/GBK、CRLF 与全角缩进、`•`/`·` 归一化、重名章节按序消耗、插图章节「有标题无正文」、目录里有而包里没有 / 包里有而目录没有、切片不重叠 |
-| `data/source/wenku8/Wenku8SourceEndToEndTest` | 假 HTTP 层下的完整取数：书架总数与批量移除表单、详情→目录→正文、`bookSummary` 只读详情页而不读目录 |
+| `data/source/wenku8/BookcasePageTest` | 真实书架页：三行的 aid/bid 配对、**行内复选框的 `value` 与该行「移除」控件里的 `delid=` 完全一致**、页头总数 |
+| `data/source/wenku8/Wenku8SourceEndToEndTest` | 假 HTTP 层下的完整取数：书架总数与移除请求（**单本与多本都是各行自己的 `delid` GET，且删除书架条目一律不发 POST**）、详情→目录→正文、`bookSummary` 只读详情页而不读目录 |
+| `data/network/HttpFetcherChallengeTest` | 质询页识别：站点自己的脚本名命中即算质询（大小写无关），普通页面/正文里恰好出现「challenge」不算——这条判定同时决定「不把质询页当正文解析」和「403 不再白白退避三次」 |
 | `data/repo/ShelfRepositoryMergeTest` | 站点书架镜像与本地阅读记录的合并、增删与重载；同步**保留**站点页面没带的封面/文库/日期，`updateBook` 只补元信息、不动进度与缓存 |
 | `data/repo/ChapterCacheOfflineBooksTest` | 「已缓存」的书单来自磁盘：章节数与占用、`.json.tmp` 与空文件不算数、非书籍 id 目录忽略 |
 | `data/repo/PackStoreTest` | `text.txt` + `index.json` 往返、按字节区间读回章节、截断的包不产生半章、GBK 按记录的解码、删除/清空、损坏或无索引的目录被忽略、按下载时间排序 |
 | `data/repo/BookRepositoryPackTest` | 下载→导入→记录；读取优先级（缓存 → 打包 → 网络）与「清理离线章节后仍可读」；`cachedChapterIds` 合并打包切片；删包/删本机副本后的回落；离线目录兜底；不支持整本下载的书源；**删除本机副本连带该书书签、清理离线章节不删书签、清理整本下载清空书签** |
-| `data/repo/BookmarkStoreTest` | 书签的落盘与读回、按书过滤且新→旧、同位置重复添加只留一条、`remove` 只删该位置、`removeAllForBook` 不影响别的书、`clear`、损坏 JSON 降级为空、缺少 bookId/chapterId 的行被忽略 |
+| `data/repo/BookmarkStoreTest` | 书签的落盘与读回、**构造 store 即读到文件（不依赖调用方记得 `load()`）**、按书过滤且新→旧、同位置重复添加只留一条、`remove` 只删该位置、`removeAllForBook` 不影响别的书、`clear`、损坏 JSON 降级为空、缺少 bookId/chapterId 的行被忽略 |
 | `ui/screen/reader/ReaderPaginationTest` | 按行装箱：段落刚好放下 / 放不下整段换页 / 超高段落按行切分且不丢字 / 段满的页不再塞半行 / 插图独占页 / 空章节；**字体 padding 计入碎块高度**；`no page is ever taller than the screen` 跨行数×段间距断言不溢出；段落 ↔ 页 ↔ 竖向列表项的换算；**碎片不带硬换行**、均衡断行产生的「一行一个字」不会被复刻成孤儿行 |
 | `ui/screen/reader/ReaderPrefetchTest` | 下一章总是预取、上一章只在本章开头预取、已缓存跳过、首/末章边界、下一章排在前面、空章节表 |
 | `ui/theme/ReaderPaletteTest` | OLED 只改夜色页面的背景且恰好是 `#000000`；米黄/白纸/护眼不被重绘；墨色不变；纯黑背景的 `luminance()` 为 0（省电的说法可验证）；跟随页面的顶底栏一起变纯黑 |
@@ -334,7 +336,7 @@ filesDir/library/{bookId}/{chapterId}.json    ← 同一批章节也导入到逐
 | `ui/screen/shelf/ShelfFiltersTest` | 四个页签的行来源与排序；有打包记录的书不出现在「已缓存」；没有书架行的下载书用记录里的元信息成行并保留进度 |
 | `ui/screen/discover/DiscoverTabsTest` | 页签策略：已读过的页签直接复用（同一栏再点不重新取数）、没读过的取数、读失败过的下次重试；**读回来是空列表也算结果**，不重新取数 |
 | `ui/screen/discover/DiscoverTabStateTest` | 每个页签画什么：本进程没读过的页签读作「加载中」（拖动时露出来的那一页不能先闪一下「暂无内容」）；加载中优先于列表、登录墙优先于失败、失败优先于空列表 |
-| `data/repo/BookRepositorySummaryTest` | 列表→详情页的元信息交接：取回、容量上限、再次点击保活；摘要**不会**替代站点详情页（`detail()` 仍会读站点一次） |
+| `data/repo/BookRepositorySummaryTest` | 列表→详情页的元信息交接：取回、容量上限、再次点击保活；摘要**不会**替代站点详情页（`detail()` 仍会读站点一次）；**详情缓存有上限且淘汰最久未用的那本** |
 | `ui/screen/reader/ChapterTurnTest` | 越界滑动是否翻章、翻章方向的判定、章节切换分类逻辑 |
 | `ui/screen/reader/VolumeKeyPageStepTest` | 音量键翻页的默认方向与「反转音量翻页」的互换、其他按键不参与 |
 
@@ -395,7 +397,8 @@ settings/
 | **阅读器的状态栏跟随顶底栏** | 状态栏是遮罩的一部分，不是阅读页的一部分：顶底栏在（单点唤出，或刚进入阅读页、5 秒内）时状态栏也在——顶底栏本来就是用户选的颜色，时钟就画在它上面；顶底栏收起时状态栏一起收起，整个屏幕交给正文。只动状态栏，**导航栏始终保留**：连它一起隐藏会进入全沉浸模式，第一次滑动只用于把栏叫回来，键盘也要临时恢复系统栏。顶栏用状态栏的固定高度（`statusBarsIgnoringVisibility`）留出位置，而不是等系统的 inset 更新——后者要几百毫秒，会让标题先按一种高度入场再跳 138px。 |
 | **阅读时隐藏状态栏** | 旧行为（进入阅读页就隐藏状态栏、退出才恢复）已改为上一条的「跟随顶底栏」。 |
 | **无 WorkManager 后台下载** | 缓存全本在进程内串行执行，退到后台可能被系统暂停；后续可迁到前台服务/WorkManager（需新增依赖）。 |
-| **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。**例外：整本下载过的书**会把当时的目录存进 `packs/{bookId}/index.json`，`detail()` 取不到站点时回退到它，因此可以完全离线打开（见 §8.2）。其余书后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
+| **离线打开仍要取一次目录** | 章节正文优先读本机缓存（`ChapterCache`，见 `BookRepository.content`），但**卷章目录只来自站点**：`BookRepository.detail` 是内存缓存（有上限，见下）、不落盘，所以书架「已缓存」里的书在完全离线时仍然打不开。**例外：整本下载过的书**会把当时的目录存进 `packs/{bookId}/index.json`，`detail()` 取不到站点时回退到它，因此可以完全离线打开（见 §8.2）。其余书后续可把 `BookDetail` 一并写进 `library/{bookId}/`，与章节同一套 JSON 编解码。 |
+| **详情缓存有上限** | `BookRepository.detailCache` 只留最近用过的 8 本书的完整详情（含卷章目录），最久没用到的先淘汰（`LinkedHashMap` 访问序）。理由是它的每条目都不小（一本书几百章），而无上限的 `HashMap` 会跟着会话一直长；用访问序而不是到达序，是因为被淘汰的应该是「很久没打开的那本」，不是「很久以前恰好打开过的那本」。它同时 `synchronized`：视图模型在各自的调度器上读写它，边读边被 `LinkedHashMap` 淘汰是不安全的。`BookRepositorySummaryTest` 锁住「有上限」和「先淘汰最久未用的」两半。 |
 | **「已缓存」按磁盘目录统计** | 书单来自 `ChapterCache.offlineBooks()`（`library/{bookId}/*.json`），而不是书架行里的 `cachedChapterIds` 记录 —— 后者只在「缓存全本」完成时写入，在线阅读缓存的章节不会记进去。两者不一致时以磁盘为准。**有整本打包记录的书不出现在这一栏**，它属于「已下载」（见 §8.2）。 |
 | **打包文件不含插图** | 站点自己的 txt 里，`插图` 章只有标题、正文为空。导入时这类章节**不记录切片**，阅读时回落到在线章节（在线那章有插图）；因此「覆盖 N/M 章」里的 N 天然少于 M（例：2231 是 254/270，差的 16 章正好是全部插图章）。 |
 | **打包快照与目录会漂移** | 站点对打包文件做缓存（页面自己写着「下载数据缓存可能延迟2小时刷新」），所以包里可能有目录里没有的章节、目录里也可能有包里还没有的章节。前者被忽略（只计入日志里的 `unmatchedHeadings`），后者不导入、仍可在在线阅读。 |
@@ -521,7 +524,7 @@ settings/
 | 事项 | 结果 |
 |---|---|
 | 编译 | `.\gradlew.bat assembleDebug` 通过，产物 `app/build/outputs/apk/debug/app-debug.apk`（13.9 MB） |
-| JVM 单元测试 | `.\gradlew.bat test` **261 个全部通过**（原 208 个，新增 53 个：`ReaderPaginationTest` 21、`ReaderPrefetchTest` 8、`BookmarkStoreTest` 11、`ReaderPaletteTest` 5、`ThemeOledTest` 5、`BookRepositoryPackTest` +3），0 失败 0 跳过 |
+| JVM 单元测试 | `.\gradlew.bat test` **266 个全部通过**（本轮之前 261 个：原 208 个，新增 53 个：`ReaderPaginationTest` 21、`ReaderPrefetchTest` 8、`BookmarkStoreTest` 11、`ReaderPaletteTest` 5、`ThemeOledTest` 5、`BookRepositoryPackTest` +3），0 失败 0 跳过 |
 | 不溢出的性质 | `ReaderPaginationTest.no page is ever taller than the screen` 在「行高 10 px × 视口 12～90 px × 段间距 {0,5,12}」共 237 组组合上断言每页累计高度 ≤ 视口高度——这是「一页正好一屏」的直接依据 |
 | 分页不丢字 | 超长段落切分后按片段拼回的字符数等于原文行数×行长 |
 | OLED 纯黑只改两个角色 | `ThemeOledTest` 断言 `background`/`surface` 为 `#000000`、墨色与强调色不变、`surfaceContainer*` 保留抬升；`ReaderPaletteTest` 断言夜色页面的 `luminance()` 恰为 0（省电的说法可验证），且米黄/白纸/护眼不被重绘 |
@@ -546,7 +549,34 @@ settings/
 - [ ] A7：删除该书的整本下载后 `filesDir/library/bookmarks.json` 中该书条目消失，且删除确认框写出了书签条数
 - [ ] A8（OLED）：设置页长按「深色」→ 应用背景变 `#000000`、弹 snackbar「已开启 OLED 纯黑…」；**再长按一次能关掉**（说明行状态跟着变）；阅读页长按「夜间」→ 页面底色 `#000000`；返回设置页确认两者是同一个开关；打开「跟随阅读背景」后顶底栏也变纯黑；下拉菜单与底部弹层**仍能看清边界**（它们不是纯黑）
 - [ ] A8 的回归点：长按**不应**被当成一次普通点击而漏掉或重复触发；短按仍然是正常选中主题
+- [ ] A9：给一本书加两三条书签 → **杀进程重进**（清后台，不是退出到设置页）→ 书签面板里三条都还在；删除其中一条后再次杀进程重进，被删的那条没有回来
+- [ ] A10：设置页打开「阅读时保持屏幕常亮」→ 阅读页放着不动超过系统息屏时间（建议临时设 15 秒）屏幕不灭；关掉该开关离开阅读页后，系统息屏时间恢复生效
+- [ ] A11：已下载的书读到第 N 章后回到书架，「继续阅读」与「已下载」两栏的行都显示进度条，比例约为 N/总章数
+- [ ] A12：手动粘贴一段**只含 `PHPSESSID`** 的 Cookie（此前已有 `jieqiUserInfo`）后，`filesDir/session/cookies.json` 里原先的 `jieqiUserInfo` 仍在（不再被这次粘贴清掉）
+- [ ] A13：书架页「多选 → 勾两台以上 → 删除」不再报 403，提示为「已从站点在线书架移除 N 本」，列表里对应行消失（`adb logcat` 里能看到每行一次 `bookcase.php?delid=`）
 - [ ] `adb logcat` 全程无 `FATAL EXCEPTION`、无 ANR
+
+### 代码复查（bug 排查与优化）
+
+对全部 `app/src/main` 源码做了一遍逐文件复查，改动与依据如下。所有条目都只依赖**编译 + 已有/新增的 JVM 单元测试**验证，设备相关的部分列进了上面的 A9～A13。
+
+| 问题 | 性质 | 修法 |
+|---|---|---|
+| **书架页「多选删除」必定报「书源拒绝访问（403）」，单本删除却正常**（用户截图） | 严重：唯一能批量清理站内收藏的入口完全不可用 | 多选走的是**页面自带的批量 `<form method="post">`**，而 app 的 POST 通道是原生 `HttpURLConnection`——站点对它的回答就是 403（Cloudflare 校验 TLS 指纹，见 §8.1，连有效 Cookie 都不够）。单本删除用的是 GET，因此走浏览器内核通道、不会 403：**同一个功能，两个入口走了两条通道**。改为**每行各发一次 `bookcase.php?delid={bid}` GET**，与单本删除完全同一条（已验证可用的）路径；代价是 N 次请求而不是 1 次，串行且受 `RateLimiter` 限速。随之删掉不再使用的整段表单解析（`BookcaseActionForm`、`parseBookcaseActionForm`、`BOOKCASE_ACTION_SELECT_NAME`、`BOOKCASE_CLASS_REMOVE`）。回归测试：`removing several books issues the row's own delid request once per book`（并断言 `fetcher.posted` 为空）、`removing several books skips ids the shelf page does not carry`。 |
+| **403 质询被当成限流，白白退避 3 次再报「请降低请求频率」** | 中：把一个必然的失败推迟约 10 秒，且指向错误的解决办法 | 403 分支原本直接 `continue` 退避重试（1.5s + 3s + 6s）。现在先读响应体判断是不是站点自己的质询页（`looksLikeChallenge`，只看脚本名不看体积——真实质询页有 ~28KB），是就立刻抛 `HttpFailure.Challenge`，界面文案变成「请先在浏览器中完成验证」；不是质询的 403 行为不变。新增 `HttpFetcherChallengeTest`。 |
+| **本地书签在杀进程后消失，且第一次增删就把 `bookmarks.json` 覆盖成空** | 严重：整个书签功能在生产代码里没有生效 | `BookmarkStore.load()` 只有测试在调用，`AppContainer` 里没有任何地方读它；而 `add`/`remove`/`clear` 都是「改内存 → 整份重写文件」，于是每次冷启动都从一个空列表开始，第一次写就把磁盘上的书签抹掉。改为**构造时自读**（与 `CookieStore` 在构造里读自己的 jar 同一套理由）：`init { runBlocking(Dispatchers.IO) { load() } }`，不再依赖调用方记得先 load。回归测试 `a freshly constructed store reads the file it is given`。 |
+| **手动粘贴 / WebView 导入 Cookie 会清掉同域下已有的 Cookie** | 严重：会把用户刚建立的登录态删掉 | `importRawCookieHeader` 走的是 `replaceForDomain`（先清空该域再写入），而调用方是**逐个 URL** 读 `CookieManager` 的（`www.wenku8.net`、`wenku8.net`、`www.wenku8.com` 各一次），站点的 Cookie 头又不是每个 URL 都一样——先导 `www.wenku8.net` 再导 `wenku8.net`（子集）就把刚拿到的会话删了；手动只粘贴 `PHPSESSID` 则会删掉旁边的 `jieqiUserInfo`。改为**按名合并**（新增 `mergeForDomain`，只覆盖这次带上来的那几个名字），`replaceForDomain` 保留给「整罐替换」的 `replaceAll`。回归测试改名为 `re-importing the same domain updates its cookies without dropping the others`。 |
+| **没封面的书每次冷启动都白花 8 次详情页请求** | 中：与 README 自称的「一本书一辈子只读一次详情页」相反 | `needsFullerMetadata` 原本是「没有封面 **且** 没有文库分类 **且** 没有更新日期」。站点确实有书没封面，而封面不是详情页能补出来的东西，于是这些书每次同步都满足条件，`metadataAttempted` 又只在内存里 → 每个新进程都重来一遍。改为按「详情页一定有、书架页一定没有」的三个字段判定（文库分类 / 更新日期 / 最新章节），补过一次就自然不再满足。 |
+| **设置里的「阅读时保持屏幕常亮」完全没有接线** | 中：开关能拨、能持久化，但没有任何效果 | `ReaderSettings.keepScreenOn` 从未被读过。在 `ReaderScreen` 里按它加减窗口的 `FLAG_KEEP_SCREEN_ON`，退出时无条件清掉（`DisposableEffect` 同时覆盖「连着退出」和「被系统销毁」两条路径）。 |
+| **书架行的阅读进度条永远是空的** | 中：`ShelfRow` 的 `progressFraction` 一直传 `null`，进度条从来没显示过 | 只在分母可靠时画：已下载的书带着打包时存下的目录（`tocTotal`），用它算「(当前章 + 1) / 总章数」；其余书没有分母，宁可没有条也不编一个百分比。 |
+| **详情缓存的 `HashMap` 无上限、且没有并发保护** | 中：一个会话里打开几十本书就会一直长；`HashMap` 被多调度器同时读写 | 换成**访问序的 `LinkedHashMap` + `synchronized`**（上限 8 本，淘汰最久未用的那本）。新增测试断言「有上限」与「先淘汰最久未用的」。 |
+| **磁盘图片缓存命中后按原图解码进内存** | 中：内存 LRU 的账目与实际占用对不上 | `readFromDisk` 用 `maxWidth = 0` 解码，却把结果塞进按 `(url, 宽度)` 记账的内存缓存——于是每张封面都以原图大小占着堆。改为按同一宽度解码。 |
+| **「移除书架」确认框没说会删掉多少本地章节** | 低：文案与行为不一致的边上 | 行为本就是「站点书架 + 本机已缓存章节」一起删，现在把已缓存的体积也写进确认框（`offlineSizeBytes`）。 |
+| `Wenku8Parser.extractLabeledValue` 里 `if (multiline) x else x` | 低：死代码 | 化简为 `x`。 |
+
+**没有改、但复查时确认过的**（避免下一轮重复排查）：`BookSource` 只有 `Wenku8Source` 一个实现，`Wenku8Urls`/`Wenku8PackParser` 与真站核实结果一致；`Html`/`CssSelector`/`Json`/`CharsetCodec`/`RateLimiter`/`RefreshThrottle`/`PackStore`/`ChapterCache`/`ShelfRepository` 的边界处理（损坏文件、半写文件、越界切片、并发锁）都有对应测试；阅读器两种排版的分页、锚点、预取、音量键、状态栏/导航栏 insets 的既有行为未动。
+
+> 站点书架页仍然带着那个批量表单，app 只是不再用它（原因见上表第一条）。这也是**唯一**一处「站点提供的能力 app 主动不用」：它只有 POST 一种提交方式，而 POST 通道在这个站点上是被 403 的那条。如果将来给网络层加一条「在浏览器内核里提交表单」的通道，批量删除可以恢复成一次请求。
 
 ---
 

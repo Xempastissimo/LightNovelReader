@@ -20,25 +20,6 @@ import com.xempastissimo.lightnovelreader.domain.model.RankType
  */
 object Wenku8Parser {
 
-    /**
-     * The bookshelf page's bulk-action form, as the page itself declares it.
-     *
-     * Every name here is read from the markup rather than hard-coded, so a rename on the
-     * site turns into "this source cannot remove books" instead of a request that looks
-     * fine and silently does nothing.
-     */
-    data class BookcaseActionForm(
-        val action: String,
-        /** The repeated field carrying the ticked rows' ids (`checkid[]`). */
-        val selectionField: String,
-        /** The dropdown naming the operation (`newclassid`). */
-        val actionField: String,
-        /** The form's own hidden fields, including the group it belongs to. */
-        val hidden: Map<String, String>,
-        val submitField: String?,
-        val submitValue: String,
-    )
-
     /** The counts the bookshelf page states about itself. */
     data class BookcaseSummary(val capacity: Int, val total: Int, val inGroup: Int)
 
@@ -262,7 +243,7 @@ object Wenku8Parser {
             if (at >= 0) candidates.add(valueOf(cutAtNextLabel(raw.substring(at + marker.length))))
         }
 
-        return candidates.firstOrNull { (if (multiline) it.isNotBlank() else it.isNotBlank()) && looksLikeValue(it) }
+        return candidates.firstOrNull { it.isNotBlank() && looksLikeValue(it) }
     }
 
     private fun cutAtNextLabel(text: String): String {
@@ -763,45 +744,6 @@ object Wenku8Parser {
             rowIds[bookId] = shelfId
         }
         return rowIds
-    }
-
-    /** The bulk-action form of the bookshelf page, or null when the page has none. */
-    fun parseBookcaseActionForm(html: String): BookcaseActionForm? {
-        val root = Html.parse(html)
-        val select = root.select("select").firstOrNull {
-            it.attr("name") == Wenku8Selectors.BOOKCASE_ACTION_SELECT_NAME
-        } ?: return null
-        val actionField = select.attr("name")?.takeIf { it.isNotBlank() } ?: return null
-
-        var form: Element? = select
-        while (form != null && form.tag != "form") form = form.parent
-        val scope: Element = form ?: root
-
-        val inputs = scope.select("input")
-        val selectionField = inputs.firstOrNull { input ->
-            input.attr("type") == "checkbox" &&
-                input.attr("name")?.startsWith(Wenku8Selectors.BOOKCASE_ROW_CHECKBOX_NAME) == true
-        }?.attr("name")?.takeIf { it.isNotBlank() } ?: return null
-
-        val hidden = LinkedHashMap<String, String>()
-        for (input in inputs) {
-            if (input.attr("type") != "hidden") continue
-            val name = input.attr("name")?.takeIf { it.isNotBlank() } ?: continue
-            hidden[name] = input.attr("value").orEmpty()
-        }
-
-        val submit = inputs.firstOrNull { it.attr("type") == "submit" }
-
-        return BookcaseActionForm(
-            // The live page ships `action=""`, meaning "post back here"; resolving that
-            // through absoluteUrl would yield null, so the bookshelf URL is the fallback.
-            action = Wenku8Urls.absoluteUrl(form?.attr("action")) ?: Wenku8Urls.BOOKCASE,
-            selectionField = selectionField,
-            actionField = actionField,
-            hidden = hidden,
-            submitField = submit?.attr("name")?.takeIf { it.isNotBlank() },
-            submitValue = submit?.attr("value").orEmpty(),
-        )
     }
 
     /**

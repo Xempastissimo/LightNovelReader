@@ -220,23 +220,43 @@ class Wenku8SourceEndToEndTest {
         )
     }
 
-    /** Two or more at once go through the page's own bulk form, as its 确认 button does. */
+    /**
+     * Several rows at once are several `delid` GETs, one per row.
+     *
+     * The site's own bulk form would be a single request, but it can only be sent as a POST,
+     * and this app's POST channel is the plain client the site answers with 403 — which is
+     * exactly how 「多选删除」 came to report 「书源拒绝访问（403）」 while deleting one row
+     * worked. The regression this locks in: **no POST is used to change the bookshelf**.
+     */
     @Test
-    fun `removing several books submits the page's own bulk form`() = runBlocking {
+    fun `removing several books issues the row's own delid request once per book`() = runBlocking {
         val (source, fetcher) = loggedInSourceWith(mapOf("/modules/article/bookcase.php" to bookcaseHtml))
 
         assertTrue(source.removeFromOnlineShelf(listOf(3988, 1973)))
 
-        val (url, fields) = fetcher.posted.single()
-        assertEquals(Wenku8Urls.BOOKCASE, url)
-        // `checkid[]` repeats once per ticked book — the reason postForm takes a list.
-        assertEquals(
-            listOf("13066825", "13078679"),
-            fields.filter { it.first == "checkid[]" }.map { it.second },
+        assertTrue(
+            "expected both rows' own delid URLs, got ${fetcher.requested}",
+            fetcher.requested.any { it.endsWith("bookcase.php?delid=13066825") } &&
+                fetcher.requested.any { it.endsWith("bookcase.php?delid=13078679") },
         )
-        assertTrue("the operation must be 移出书架", fields.contains("newclassid" to "-1"))
-        assertTrue("the current group must be posted back", fields.contains("clsssid" to "0"))
-        assertTrue(fields.contains("btnsubmit" to " 确认 "))
+        assertTrue(
+            "removal must not be a POST: that channel is the 403 one, got ${fetcher.posted}",
+            fetcher.posted.isEmpty(),
+        )
+    }
+
+    /** A row that is not on the page has no `bid`, and must not become a request for one. */
+    @Test
+    fun `removing several books skips ids the shelf page does not carry`() = runBlocking {
+        val (source, fetcher) = loggedInSourceWith(mapOf("/modules/article/bookcase.php" to bookcaseHtml))
+
+        source.removeFromOnlineShelf(listOf(3988, 999999))
+
+        assertEquals(
+            "only the listed row may be removed",
+            1,
+            fetcher.requested.count { it.contains("delid=") },
+        )
     }
 
     @Test

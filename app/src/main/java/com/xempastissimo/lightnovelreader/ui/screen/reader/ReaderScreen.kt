@@ -3,6 +3,7 @@ package com.xempastissimo.lightnovelreader.ui.screen.reader
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutLinearInEasing
@@ -720,6 +721,28 @@ fun ReaderScreen(
                 previousStatusBars?.let { controller.isAppearanceLightStatusBars = it }
                 previousNavigationBars?.let { controller.isAppearanceLightNavigationBars = it }
                 controller.show(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+    }
+
+    // 设置 → 阅读外观 → 「阅读时保持屏幕常亮」. It is a property of the *window* rather than of any
+    // composable, so it is applied here and cleared on the way out however the reader is left;
+    // the flag is the platform's own mechanism, which is why nothing has to watch for touches.
+    DisposableEffect(insetsController, settings.keepScreenOn) {
+        val window = view.context.findActivity()?.window
+        val keepOn = settings.keepScreenOn
+        if (window != null) {
+            runCatching {
+                if (keepOn) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+        }
+        onDispose {
+            if (window != null) {
+                runCatching { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             }
         }
     }

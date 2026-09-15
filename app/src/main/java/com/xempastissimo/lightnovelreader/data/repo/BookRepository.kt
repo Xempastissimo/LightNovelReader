@@ -12,6 +12,7 @@ import com.xempastissimo.lightnovelreader.domain.model.ContentBlock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Collections
 
 /**
  * One book's copy on disk: how many chapters it holds and what it costs in space.
@@ -186,7 +187,22 @@ class BookRepository(
     private val bookmarks: BookmarkStore,
 ) {
 
-    private val detailCache = HashMap<Int, BookDetail>(8)
+    /**
+     * Details already read, most recently used last, capped at [MAX_CACHED_DETAILS].
+     *
+     * A `LinkedHashMap` in access order rather than a plain `HashMap` for two reasons: it is
+     * bounded, so opening many books in one session cannot grow it for the life of the
+     * process, and it evicts the *least recently used* book — a `HashMap` would eventually
+     * drop an arbitrary one, which is the book the reader is most likely to come back to.
+     *
+     * Synchronised because view models read and write it from whichever dispatcher they were
+     * launched on, and a `LinkedHashMap` mutating during `removeEldestEntry` is not safe to
+     * share unsynchronised.
+     */
+    private val detailCache = object : LinkedHashMap<Int, BookDetail>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, BookDetail>?): Boolean =
+            size > MAX_CACHED_DETAILS
+    }.let { map -> Collections.synchronizedMap(map) }
 
     /**
      * What a list just showed about a book, so the page opened from that list can draw its
@@ -218,7 +234,7 @@ class BookRepository(
      * Null means nothing is known yet and the caller has to show its loading state, which is
      * what happens after a process restart: the hand-off does not survive it.
      */
-    fun summary(bookId: Int): Book? = summaries[bookId] ?: detailCache[bookId]?.book
+    fun summary(bookId: Int): Book? = summaries[bookId] ?: cachedDetail(bookId)?.book
 
     suspend fun recentUpdates() = source.recentUpdates()
 
@@ -246,19 +262,20 @@ class BookRepository(
      * rather than keep serving a snapshot.
      */
     suspend fun detail(bookId: Int, forceRefresh: Boolean = false): BookDetail {
-        val cached = detailCache[bookId]
-        if (!forceRefresh && cached != null && cached.chapters.isNotEmpty()) return cached
+        cachedDetail(bookId)
+            ?.takeIf { !forceRefresh && it.chapters.isNotEmpty() }
+            ?.let { return it }
         val detail = try {
             source.detail(bookId)
         } catch (error: Throwable) {
             packs.book(bookId)?.tocDetail()?.takeIf { it.chapters.isNotEmpty() }?.let { return it }
             throw error
         }
-        detailCache[bookId] = detail
+        synchronized(detailCache) { detailCache[bookId] = detail }
         return detail
     }
 
-    fun cachedDetail(bookId: Int): BookDetail? = detailCache[bookId]
+    fun cachedDetail(bookId: Int): BookDetail? = synchronized(detailCache) { detailCache[bookId] }
 
     /**
      * A book's metadata on its own, without the chapter tree.
@@ -456,12 +473,15 @@ class BookRepository(
     fun totalOfflineSizeBytes(): Long = cache.totalSizeBytes()
 
     fun invalidate(bookId: Int) {
-        detailCache.remove(bookId)
+        synchronized(detailCache) { detailCache.remove(bookId) }
     }
 
     private companion object {
         /** How many rows' worth of list metadata to keep for the next screen's first frame. */
         const val MAX_REMEMBERED_SUMMARIES = 32
+
+        /** How many books' full details — metadata *and* chapter tree — to keep in memory. */
+        const val MAX_CACHED_DETAILS = 8
     }
 }
 

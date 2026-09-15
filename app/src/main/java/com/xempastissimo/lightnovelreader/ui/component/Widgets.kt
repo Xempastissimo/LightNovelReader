@@ -104,7 +104,7 @@ fun BookCard(
                 }
                 if (book.category.isNotBlank()) {
                     Text(
-                        text = book.category,
+                        text = "分类：${book.category}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.tertiary,
                         maxLines = 1,
@@ -113,7 +113,7 @@ fun BookCard(
                 }
                 if (book.updatedAt.isNotBlank()) {
                     Text(
-                        text = book.updatedAt,
+                        text = "最近更新：${book.updatedAt}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -302,7 +302,7 @@ private const val WAVE_BAR_WIDTH_DP = 3
 private const val WAVE_BAR_GAP_DP = 4
 private const val WAVE_MAX_HEIGHT_DP = 18
 private const val WAVE_MIN_HEIGHT_DP = 4
-private const val WAVE_DURATION_MS = 1200
+private const val WAVE_DURATION_MS = 800
 
 /**
  * A compact waveform-style loading indicator for "load more" at the bottom of a list.
